@@ -22,6 +22,7 @@ notes/intro
 notes/quick_start
 notes/developer
 notes/grouper_interface
+notes/grouper_modules
 notes/build
 notes/hardware
 cli

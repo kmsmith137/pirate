@@ -43,7 +43,7 @@ not the injected Gaussian sigma.
 ## What the notebook explains
 
 1. Load an event and choose its beam, tree, and actual source chunk.
-2. Load maps with `FrbOfflineGrouper.load_beam_chunk`, select the beam axis,
+2. Load maps with `OfflineMapReader.load_beam_chunk`, select the beam axis,
    and check the exact `(idm, itime)` pixel against the event.
 3. Decode that pixel with `GpuArgmaxDecoder.decode` and verify DM, arrival time,
    width, and band against the catalog.

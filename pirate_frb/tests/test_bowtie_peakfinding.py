@@ -4,9 +4,9 @@ from dataclasses import replace
 
 import numpy as np
 
-from ..Peakfinders import (
+from ..BowtiePeakfinding import (
     EdgeFlag,
-    OfflinePeakExtractor,
+    StreamingPeakExtractor,
     PeakFinderGeometry,
     build_full_band_bowtie,
     concatenate_raw_candidates,
@@ -288,7 +288,7 @@ def test_streaming_matches_concatenated_and_flushes(cuda_device_id=0):
             assume_steady_state=True,
         )
 
-        extractor = OfflinePeakExtractor(
+        extractor = StreamingPeakExtractor(
             geometry, threshold=10.0, beam_ids=(9,),
             assume_steady_state=True,
         )
@@ -469,7 +469,7 @@ def test_streaming_halo_size_is_exact_and_requires_two(cuda_device_id=0):
         )
         for invalid in (True, 1, 2.0):
             try:
-                OfflinePeakExtractor(
+                StreamingPeakExtractor(
                     geometry,
                     threshold=10.0,
                     beam_ids=(5,),
@@ -483,7 +483,7 @@ def test_streaming_halo_size_is_exact_and_requires_two(cuda_device_id=0):
 
         snr = cp.zeros((1, 1, 5), dtype=cp.float32)
         token = cp.zeros((1, 1, 5), dtype=cp.uint32)
-        default = OfflinePeakExtractor(
+        default = StreamingPeakExtractor(
             geometry,
             threshold=10.0,
             beam_ids=(5,),
@@ -492,7 +492,7 @@ def test_streaming_halo_size_is_exact_and_requires_two(cuda_device_id=0):
         default.process_chunk(snr, token, 0)
         assert default._tail_snr.shape[2] == 2 * geometry.time_radius
 
-        wider = OfflinePeakExtractor(
+        wider = StreamingPeakExtractor(
             geometry,
             threshold=10.0,
             beam_ids=(5,),
@@ -517,7 +517,7 @@ def test_streaming_rejects_geometry_requiring_i_plus_2(cuda_device_id=0):
         )
         assert geometry.time_radius == 5 > geometry.ntime
         try:
-            OfflinePeakExtractor(
+            StreamingPeakExtractor(
                 geometry,
                 threshold=10.0,
                 beam_ids=(5,),

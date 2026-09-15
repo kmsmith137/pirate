@@ -11,15 +11,15 @@ from types import SimpleNamespace
 import numpy as np
 
 from ..ArgmaxMetadata import ARGMAX_ENCODING
-from ..FrbOfflineGrouper import FrbOfflineGrouper
-from ..OfflineCandidateGrouper import group_candidates
-from ..Peakfinders import EdgeFlag
+from ..OfflineMapReader import OfflineMapReader
+from ..Clustering import cluster_candidates
+from ..BowtiePeakfinding import EdgeFlag
 from ..TriggerCatalog import validate_trigger_catalog_tree
 from ..run_offline_dedisperser import _write_snr_asdf, _validate_snr_asdf_tree
 from .. import run_offline_grouper as runner
 from ..pirate_pybind11 import DedispersionPlan
 from .test_gpu_argmax_decoder import _make_plan
-from .test_offline_candidate_grouper import _candidates, _geometry
+from .test_clustering import _candidates, _geometry
 
 def _runner_config(directory, *, snr_threshold=10.0):
     """Write the strict runner fixture without depending on source-tree data."""
@@ -105,7 +105,7 @@ def test_v3_writer_and_ragged_loader(cuda_device_id=0):
     with cp.cuda.Device(cuda_device_id), tempfile.TemporaryDirectory(
             prefix="pirate-v3-loader-") as tmp:
         fixture = _write_toy_acquisition(tmp)
-        loader = FrbOfflineGrouper(tmp, cuda_device_id=cuda_device_id)
+        loader = OfflineMapReader(tmp, cuda_device_id=cuda_device_id)
         assert loader.ntrees == 6
         assert loader.beam_ids == (7, 11)
         assert loader.dcores == fixture.dcores
@@ -182,7 +182,7 @@ def test_v3_unknown_startup_requires_explicit_policy(cuda_device_id=0):
     with cp.cuda.Device(cuda_device_id), tempfile.TemporaryDirectory(
             prefix="pirate-v3-startup-") as tmp:
         _write_toy_acquisition(tmp, include_start=False)
-        loader = FrbOfflineGrouper(tmp, cuda_device_id=cuda_device_id)
+        loader = OfflineMapReader(tmp, cuda_device_id=cuda_device_id)
         assert loader.producer_start_by_beam == {7: None, 11: None}
         config_file = _runner_config(tmp, snr_threshold=1e30)
         try:
@@ -234,7 +234,7 @@ def test_v3_rejects_legacy_and_corrupt_decoder_metadata():
                 else:
                     raise AssertionError("writer validator accepted malformed metadata")
             try:
-                FrbOfflineGrouper(tmp)
+                OfflineMapReader(tmp)
             except ValueError as exc:
                 assert path in str(exc) and expected in str(exc), str(exc)
             else:
@@ -248,7 +248,7 @@ def test_v3_rejects_changed_producer_dcores():
         _rewrite_map(fixture.files[(7, 1)],
                      lambda tree: tree["dcores"].__setitem__(0, 1))
         try:
-            FrbOfflineGrouper(tmp)
+            OfflineMapReader(tmp)
         except ValueError as exc:
             assert "Dcores" in str(exc) and "differ from the first file" in str(exc)
         else:
@@ -284,7 +284,7 @@ def test_terminal_output_names_startup_incomplete(cuda_device_id=0):
 
     with cp.cuda.Device(cuda_device_id):
         geometry = _geometry(cp)
-        grouped = group_candidates(_candidates(cp, geometry, [{
+        grouped = cluster_candidates(_candidates(cp, geometry, [{
             "tree": 0,
             "snr": 30.0,
             "dm": 100.0,

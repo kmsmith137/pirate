@@ -12,14 +12,14 @@ from .test_atomic_out import test_atomic_out
 from .test_decode_argmax import test_decode_argmax
 from .test_dedispersion_config import test_primary_tree_chains, test_random_args_flags
 from .test_network import test_network, test_slow_subscriber
-from .test_packaging import test_offline_peak_modules_packaged
+from .test_packaging import test_grouper_modules_packaged, test_grouper_import_compatibility
 from .test_pulse_injection import test_multi_burst_cli, test_pulse_injection, test_pulse_invariants
 from .test_server import test_server
 from .test_subbands import test_frequency_subbands_parity, test_subband_property
 
 
-def test_offline_peak_milestone(cuda_device_id=0):
-    """Run the pytest-free offline extraction/grouping/catalog regressions.
+def test_grouper_pipeline(cuda_device_id=0):
+    """Run the shared extraction, clustering, streaming and catalog regressions.
 
     PIRATE's historical ``python -m pirate_frb test`` runner invokes ordinary
     assertion-based functions directly.  Discovering the focused functions here
@@ -37,13 +37,13 @@ def test_offline_peak_milestone(cuda_device_id=0):
         f"{__name__}.test_offline_grouper_streaming"
     )
     config_tests = importlib.import_module(
-        f"{__name__}.test_offline_grouper_config"
+        f"{__name__}.test_grouper_config"
     )
     grouping_tests = importlib.import_module(
-        f"{__name__}.test_offline_candidate_grouper"
+        f"{__name__}.test_clustering"
     )
     peakfinder_tests = importlib.import_module(
-        f"{__name__}.test_peakfinders_stream"
+        f"{__name__}.test_bowtie_peakfinding"
     )
     catalog_tests = importlib.import_module(
         f"{__name__}.test_trigger_catalog"
@@ -52,7 +52,8 @@ def test_offline_peak_milestone(cuda_device_id=0):
     # Packaging is a host-only contract check; the modules below contain the
     # focused GPU and offline integration cases. Sorting by name
     # gives reproducible output/failure order in the custom runner.
-    test_offline_peak_modules_packaged()
+    test_grouper_modules_packaged()
+    test_grouper_import_compatibility()
     for module in (
             config_tests,
             peakfinder_tests,

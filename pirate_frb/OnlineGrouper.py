@@ -105,15 +105,15 @@ def run_online_grouper(bundle, grouper_addr, *, sifter_addr=None, progress=None)
     After final event delivery, keep producer-owned CUDA mappings open until
     the dedisperser stops. Premature disconnects remain processing errors.
     """
-    from .OfflineGrouperConfig import OfflineGrouperConfig
+    from .GrouperConfig import GrouperConfig
     from .ArgmaxMetadata import ARGMAX_ENCODING
-    from .SharedGrouper import GrouperSetup, CatalogRecorder
+    from .GrouperPipeline import GrouperSetup, CatalogRecorder
     from .rpc import FrbGrouper
     from .rpc.FrbSifterClient import FrbSifterClient
 
     start = _exact_integer(bundle["initial_chunk"], "initial_chunk")
     count = _exact_integer(bundle["nchunks"], "nchunks", minimum=1)
-    configuration = OfflineGrouperConfig.from_mapping(bundle["grouper_config"])
+    configuration = GrouperConfig.from_mapping(bundle["grouper_config"])
     with ExitStack() as stack:
         g = stack.enter_context(FrbGrouper(grouper_addr, restore_cuda_device=False))
         validate_live_handshake(g, bundle, expected_start_chunk=start, expected_nchunks=count)

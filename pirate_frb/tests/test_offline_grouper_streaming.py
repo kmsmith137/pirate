@@ -5,14 +5,14 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from ..FrbOfflineGrouper import BeamBatch
-from ..OfflineCandidateGrouper import (
+from ..OfflineMapReader import BeamBatch
+from ..Clustering import (
     GpuDecodedCandidates,
-    GroupingConfig,
+    ClusteringTolerances,
 )
-from ..Peakfinders import GpuRawCandidates
+from ..BowtiePeakfinding import GpuRawCandidates
 from .. import run_offline_grouper as runner
-from .test_offline_candidate_grouper import _geometry
+from .test_clustering import _geometry
 
 
 def _raw(cp, rows):
@@ -110,7 +110,7 @@ def test_streaming_ownership_louder_next_chunk_and_no_i_plus_2_influence(
     with cp.cuda.Device(cuda_device_id):
         geometry = _geometry(cp)
         decoder = _RawDecoder(cp, geometry)
-        config = GroupingConfig(
+        config = ClusteringTolerances(
             dm_tolerance_bins=1.5, time_padding_bins=1.5
         )
 
@@ -258,7 +258,7 @@ def test_streaming_timeout_policies_drop_backlog_and_keep_complete_events(
     with cp.cuda.Device(cuda_device_id):
         geometry = _geometry(cp)
         decoder = _RawDecoder(cp, geometry)
-        config = GroupingConfig()
+        config = ClusteringTolerances()
         owner = _raw(cp, [{
             "source_chunk_index": 0, "tree": 0, "idm": 20,
             "itime": 7, "toa": 20, "snr": 20.0,
@@ -274,7 +274,7 @@ def test_streaming_timeout_policies_drop_backlog_and_keep_complete_events(
             },
         ])
 
-        real_group = runner.group_candidates
+        real_group = runner.cluster_candidates
         seen_timeouts = []
 
         def timed_group(
@@ -298,7 +298,7 @@ def test_streaming_timeout_policies_drop_backlog_and_keep_complete_events(
                 complete=False,
             )
 
-        runner.group_candidates = timed_group
+        runner.cluster_candidates = timed_group
         try:
             discarded, retained_discard = runner._group_streaming_window(
                 cp,
@@ -325,7 +325,7 @@ def test_streaming_timeout_policies_drop_backlog_and_keep_complete_events(
                 timeout_policy="emit_partial",
             )
         finally:
-            runner.group_candidates = real_group
+            runner.cluster_candidates = real_group
 
         assert seen_timeouts == [17, 17]
         assert discarded.output_status == "discarded"
@@ -408,8 +408,8 @@ def _scripted_extract(
     loader = ScriptedLoader()
     decoder = _RawDecoder(cp, grouping_geometry)
     captures = []
-    real_extractor = runner.OfflinePeakExtractor
-    real_group = runner.group_candidates
+    real_extractor = runner.StreamingPeakExtractor
+    real_group = runner.cluster_candidates
 
     def recording_group(
             candidates, geometry, *, config=None, timeout_ms=0):
@@ -425,8 +425,8 @@ def _scripted_extract(
             timeout_ms=timeout_ms,
         )
 
-    runner.OfflinePeakExtractor = ScriptedExtractor
-    runner.group_candidates = recording_group
+    runner.StreamingPeakExtractor = ScriptedExtractor
+    runner.cluster_candidates = recording_group
     windows = []
     try:
         coverage, startup, complete = runner._extract_beam_batch(
@@ -445,12 +445,12 @@ def _scripted_extract(
             timeout_policy="discard",
             max_chunks=max_chunks,
             assume_steady_state=True,
-            grouping_config=GroupingConfig(),
+            grouping_config=ClusteringTolerances(),
             consume_window=windows.append,
         )
     finally:
-        runner.OfflinePeakExtractor = real_extractor
-        runner.group_candidates = real_group
+        runner.StreamingPeakExtractor = real_extractor
+        runner.cluster_candidates = real_group
 
     return (
         (tuple(windows), coverage, startup, complete),

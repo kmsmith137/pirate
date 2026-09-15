@@ -1,6 +1,6 @@
 """Bounded offline peak finding and representative grouping.
 
-The runner keeps one :class:`~pirate_frb.Peakfinders.OfflinePeakExtractor`
+The runner keeps one :class:`~pirate_frb.BowtiePeakfinding.StreamingPeakExtractor`
 per ragged producer tree and finalizes candidates with one source-chunk of
 latency.  A grouping window contains every candidate owned by chunk ``i`` and
 only candidates in the effective left halo of chunk ``i+1``.  The configured
@@ -31,22 +31,22 @@ import operator
 
 import numpy as np
 
-from .FrbOfflineGrouper import FrbOfflineGrouper
+from .OfflineMapReader import OfflineMapReader
 from .GpuArgmaxDecoder import GpuArgmaxDecoder
-from .OfflineCandidateGrouper import (
+from .Clustering import (
     GpuDecodedCandidates,
     GpuEventTable,
-    GpuGroupingResult,
+    GpuClusteringResult,
     GpuMemberTable,
-    GroupingConfig,
-    GroupingGeometry,
-    group_candidates,
+    ClusteringTolerances,
+    ClusteringGeometry,
+    cluster_candidates,
 )
-from .OfflineGrouperConfig import load_offline_grouper_config
-from .Peakfinders import (
+from .GrouperConfig import load_grouper_config
+from .BowtiePeakfinding import (
     EdgeFlag,
     GpuRawCandidates,
-    OfflinePeakExtractor,
+    StreamingPeakExtractor,
     PeakFinderGeometry,
     concatenate_raw_candidates,
     make_startup_valid_mask,
@@ -60,8 +60,8 @@ from .utils import atomic_print
 
 
 # Compatibility exports for callers of the original offline helpers.
-from .SharedGrouper import (
-    GroupingWindow, StreamingGrouper, GrouperSetup, CatalogRecorder,
+from .GrouperPipeline import (
+    ClusteringWindow, StreamingGrouper, GrouperSetup, CatalogRecorder,
     _optional_nonnegative_integer, _effective_grouping_halo_columns,
     _raw_take, _raw_concatenate, _project_grouping_events,
     _owned_grouping_result, _split_emitted_chunks, _partition_current_halo,
@@ -72,7 +72,7 @@ from .SharedGrouper import (
 def _group_streaming_window(*args, **kwargs):
     # Keep the historical test seam; actual association remains shared.
     return _shared_group_streaming_window(
-        *args, **kwargs, group_function=group_candidates
+        *args, **kwargs, group_function=cluster_candidates
     )
 
 
@@ -179,7 +179,7 @@ def _extract_beam_batch(
         timeout_policy=timeout_policy, assume_steady_state=assume_steady_state,
         grouping_config=grouping_config, consume_window=consume_window,
         grouping_halo_columns_by_tree=grouping_halo_columns_by_tree,
-        extractor_factory=OfflinePeakExtractor, group_function=group_candidates,
+        extractor_factory=StreamingPeakExtractor, group_function=cluster_candidates,
     )
     all_chunks = beam_batch.source_chunk_indices
     selected = all_chunks if max_chunks is None else all_chunks[:max_chunks]
@@ -234,7 +234,7 @@ def run_offline_grouper(
 
     # Validate before constructing the acquisition loader or touching CUDA
     # state.  Peakfinder/grouping modules import CuPy at module import time.
-    configuration = load_offline_grouper_config(config_file)
+    configuration = load_grouper_config(config_file)
     max_chunks = _optional_nonnegative_integer(max_chunks, "max_chunks")
 
     import cupy as cp
@@ -242,8 +242,8 @@ def run_offline_grouper(
     peakfinding = configuration.peakfinding
     grouping = configuration.grouping
     execution = configuration.execution
-    loader = FrbOfflineGrouper(acqdir, cuda_device_id=cuda_device_id)
-    grouping_config = GroupingConfig(
+    loader = OfflineMapReader(acqdir, cuda_device_id=cuda_device_id)
+    grouping_config = ClusteringTolerances(
         dm_tolerance_bins=grouping.dm_tolerance,
         time_padding_bins=grouping.time_tolerance,
     )
@@ -393,4 +393,8 @@ def run_offline_grouper(
     return written
 
 
-__all__ = ["GroupingWindow", "run_offline_grouper"]
+__all__ = ["ClusteringWindow", "GroupingWindow", "run_offline_grouper"]
+
+
+# Import compatibility for callers of the offline runner.
+GroupingWindow = ClusteringWindow

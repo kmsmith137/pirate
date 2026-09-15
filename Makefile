@@ -384,10 +384,14 @@ PYFILES = \
   pirate_frb/GpuDedisperser.py \
   pirate_frb/ArgmaxMetadata.py \
   pirate_frb/GpuArgmaxDecoder.py \
+  pirate_frb/BowtiePeakfinding.py \
   pirate_frb/Peakfinders.py \
+  pirate_frb/GrouperConfig.py \
   pirate_frb/OfflineGrouperConfig.py \
+  pirate_frb/Clustering.py \
   pirate_frb/OfflineCandidateGrouper.py \
   pirate_frb/TriggerCatalog.py \
+  pirate_frb/GrouperPipeline.py \
   pirate_frb/SharedGrouper.py \
   pirate_frb/OnlineGrouper.py \
   pirate_frb/LivePipeline.py \
@@ -398,6 +402,7 @@ PYFILES = \
   pirate_frb/run_rpc_status.py \
   pirate_frb/run_toy_grouper.py \
   pirate_frb/run_offline_dedisperser.py \
+  pirate_frb/OfflineMapReader.py \
   pirate_frb/FrbOfflineGrouper.py \
   pirate_frb/run_offline_grouper.py \
   pirate_frb/make_simulated_acq.py \
@@ -477,14 +482,14 @@ PYFILES = \
   pirate_frb/tests/test_atomic_out.py \
   pirate_frb/tests/test_decode_argmax.py \
   pirate_frb/tests/test_gpu_argmax_decoder.py \
-  pirate_frb/tests/test_offline_candidate_grouper.py \
+  pirate_frb/tests/test_clustering.py \
   pirate_frb/tests/test_dedispersion_config.py \
   pirate_frb/tests/test_network.py \
   pirate_frb/tests/test_offline_grouper.py \
   pirate_frb/tests/test_offline_grouper_streaming.py \
-  pirate_frb/tests/test_offline_grouper_config.py \
+  pirate_frb/tests/test_grouper_config.py \
   pirate_frb/tests/test_packaging.py \
-  pirate_frb/tests/test_peakfinders_stream.py \
+  pirate_frb/tests/test_bowtie_peakfinding.py \
   pirate_frb/tests/test_pulse_injection.py \
   pirate_frb/tests/test_server.py \
   pirate_frb/tests/test_trigger_catalog.py \
@@ -642,7 +647,7 @@ SDIST_FILES += $(PYFILES) $(CUDAGEN_PYFILES) $(LIB_SRCFILES) $(PYEXT_SRCFILES) $
 SDIST_FILES += $(OFFLINE_PEAK_TEST_DATA) $(OFFLINE_GROUPER_EXAMPLE)
 SDIST_FILES += configs/dedispersion/chord_sb2_et.yml configs/xengine_metadata.yml
 SDIST_FILES += configs/experiments/chord_8beams.yml
-SDIST_FILES += README.md notes/install.md configs/README.md
+SDIST_FILES += README.md notes/install.md notes/grouper_modules.md configs/README.md
 SDIST_FILES += environment_minimal.yml environment_dev.yml asdf-cxx/LICENSE.rst
 SDIST_FILES += examples/README.md examples/simple_frb/README.md
 SDIST_FILES += examples/simple_frb/generate.py examples/simple_frb/observation.yml examples/simple_frb/dedispersion.yml

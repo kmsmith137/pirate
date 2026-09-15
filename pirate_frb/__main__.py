@@ -154,7 +154,8 @@ def parse_test(subparsers):
     parser.add_argument('--sb', action='store_true', help='Runs frequency-subband tests (C++/python parity of the two FrequencySubbands implementations, and the per-tree subband-set property)')
     parser.add_argument('--aout', action='store_true', help='Runs the serialized-output test (atomic_print/AtomicPrint, C++ and python threads)')
     parser.add_argument("--live", action="store_true", help="Checks live recipes and command wiring without a live run")
-    parser.add_argument('--ofg', action='store_true', help='Runs offline peak-finding, decoding, grouping, and catalog tests')
+    parser.add_argument('--grouper', '--ofg', dest='grouper', action='store_true',
+                        help='Runs shared peakfinding, decoding, clustering, and catalog tests')
     parser.add_argument('--util', action='store_true', help='Runs test_utils() (integer/bit helpers in inlines.hpp, plus bit_reverse_slow())')
     parser.add_argument('--dtl1', action='store_true', help='Runs pirate_frb.detrending.lps1d tests (1-d local-polynomial detrender: the numpy reference, plus GpuDetrenderLps1d against it)')
     parser.add_argument('--dtk1', action='store_true', help='Runs pirate_frb.detrending.kf1d tests (fixed-lag Kalman detrender; numpy only, there is no GPU kernel yet)')
@@ -179,7 +180,7 @@ def rrange(registry_class):
 
 
 def test(args):
-    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'util', 'dtl1', 'dtk1', 'dtl2', 'ofg', 'live' ]
+    test_flags = [ 'rt', 'pfwr', 'pfom', 'pfsq', 'gldk', 'gddk', 'gpfk', 'grck', 'gtgk', 'gdqk', 'cdd2', 'sbdd', 'casm', 'chime', 'zomb', 'dd', 'varmap', 'net', 'serv', 'sim', 'amax', 'sb', 'aout', 'util', 'dtl1', 'dtk1', 'dtl2', 'grouper', 'live' ]
     run_all_tests = not any(getattr(args,x) for x in test_flags)
 
     seed = draw_random_seed() if args.randomize_seed else args.seed
@@ -379,8 +380,8 @@ def test(args):
             from .tests.test_live_pipeline import test_live_pipeline
             test_live_pipeline()
 
-        if (run_all_tests or args.ofg) and i == 0:
-            tests.test_offline_peak_milestone(args.gpu)
+        if (run_all_tests or args.grouper) and i == 0:
+            tests.test_grouper_pipeline(args.gpu)
 
         if run_all_tests or args.net:
             # Every one of its seven tests draws nfreq, time_samples_per_chunk, the beam

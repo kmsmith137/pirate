@@ -1,4 +1,4 @@
-"""Distribution-contract checks for the offline peak-extraction modules.
+"""Distribution and import contracts for the shared grouper modules.
 
 These tests use only the Python standard library so they can run through
 PIRATE's installed-package test runner without pulling pytest into production.
@@ -15,14 +15,19 @@ import zipfile
 
 _REQUIRED_PYFILES = (
     "pirate_frb/__main__.py",
+    "pirate_frb/BowtiePeakfinding.py",
     "pirate_frb/Peakfinders.py",
+    "pirate_frb/GrouperConfig.py",
     "pirate_frb/OfflineGrouperConfig.py",
     "pirate_frb/ArgmaxMetadata.py",
     "pirate_frb/GpuArgmaxDecoder.py",
+    "pirate_frb/Clustering.py",
     "pirate_frb/OfflineCandidateGrouper.py",
+    "pirate_frb/OfflineMapReader.py",
     "pirate_frb/FrbOfflineGrouper.py",
     "pirate_frb/TriggerCatalog.py",
     "pirate_frb/run_offline_grouper.py",
+    "pirate_frb/GrouperPipeline.py",
     "pirate_frb/SharedGrouper.py",
     "pirate_frb/OnlineGrouper.py",
     "pirate_frb/LivePipeline.py",
@@ -30,12 +35,12 @@ _REQUIRED_PYFILES = (
     "pirate_frb/DedispersionServer.py",
     "pirate_frb/tests/test_live_pipeline.py",
     "pirate_frb/tests/__init__.py",
-    "pirate_frb/tests/test_peakfinders_stream.py",
+    "pirate_frb/tests/test_bowtie_peakfinding.py",
     "pirate_frb/tests/test_gpu_argmax_decoder.py",
-    "pirate_frb/tests/test_offline_candidate_grouper.py",
+    "pirate_frb/tests/test_clustering.py",
     "pirate_frb/tests/test_offline_grouper.py",
     "pirate_frb/tests/test_offline_grouper_streaming.py",
-    "pirate_frb/tests/test_offline_grouper_config.py",
+    "pirate_frb/tests/test_grouper_config.py",
     "pirate_frb/tests/test_packaging.py",
     "pirate_frb/tests/test_trigger_catalog.py",
 )
@@ -46,6 +51,7 @@ _REQUIRED_DATA_FILES = (
 _LIVE_DATA_FILES = ("pirate_frb/tests/data/chord_8beams.yml", "pirate_frb/tests/data/xengine_metadata.yml")
 _REQUIRED_DISTRIBUTION_FILES = _REQUIRED_PYFILES + _REQUIRED_DATA_FILES + _LIVE_DATA_FILES
 _REQUIRED_SDIST_ONLY_FILES = (
+    "notes/grouper_modules.md",
     "AIclassifier/README.md",
     "AIclassifier/requirements.txt",
     "AIclassifier/RetrieveEvent.ipynb",
@@ -75,7 +81,7 @@ def _archive_members(filename):
         return tuple(member.name for member in archive.getmembers())
 
 
-def test_offline_peak_modules_packaged():
+def test_grouper_modules_packaged():
     """Fail when a required module falls out of PYFILES or a built archive."""
     repository = Path(__file__).resolve().parents[2]
     package = Path(__file__).resolve().parents[1]
@@ -200,12 +206,12 @@ def test_offline_peak_modules_packaged():
     # checkout and an isolated wheel target.  The release verification also
     # invokes ``python -m pirate_frb --help`` from a directory outside the source checkout.
     for module_name in (
-        "pirate_frb.Peakfinders",
-        "pirate_frb.OfflineGrouperConfig",
+        "pirate_frb.BowtiePeakfinding",
+        "pirate_frb.GrouperConfig",
         "pirate_frb.ArgmaxMetadata",
         "pirate_frb.GpuArgmaxDecoder",
-        "pirate_frb.OfflineCandidateGrouper",
-        "pirate_frb.FrbOfflineGrouper",
+        "pirate_frb.Clustering",
+        "pirate_frb.OfflineMapReader",
         "pirate_frb.TriggerCatalog",
         "pirate_frb.run_offline_grouper",
     ):
@@ -235,3 +241,44 @@ def test_offline_peak_modules_packaged():
             "--exact-time-tile-columns", "--diagnostics", "--timings",
             "--peakfinder-method", "--edge-policy", "--startup-policy"):
         assert removed not in help_text
+
+
+def test_grouper_import_compatibility():
+    """Old imports resolve to the same classes and functions as canonical imports."""
+    pairs = {
+        "OfflineCandidateGrouper": ("Clustering", {
+            "GroupingConfig": "ClusteringTolerances",
+            "GroupingGeometry": "ClusteringGeometry",
+            "GpuGroupingResult": "GpuClusteringResult",
+            "group_candidates": "cluster_candidates",
+            "_group_candidates_serial_oracle": "_cluster_candidates_serial_oracle",
+        }),
+        "OfflineGrouperConfig": ("GrouperConfig", {
+            "OfflineGrouperConfig": "GrouperConfig",
+            "OfflineGrouperConfigError": "GrouperConfigError",
+            "GroupingConfig": "ClusteringConfig",
+            "load_offline_grouper_config": "load_grouper_config",
+            "_StrictSafeLoader": "_StrictSafeLoader",
+        }),
+        "FrbOfflineGrouper": ("OfflineMapReader", {"FrbOfflineGrouper": "OfflineMapReader"}),
+        "SharedGrouper": ("GrouperPipeline", {"GroupingWindow": "ClusteringWindow"}),
+        "Peakfinders": ("BowtiePeakfinding", {"OfflinePeakExtractor": "StreamingPeakExtractor"}),
+    }
+    for old_name, (new_name, names) in pairs.items():
+        old = importlib.import_module("pirate_frb." + old_name)
+        new = importlib.import_module("pirate_frb." + new_name)
+        for old_symbol, new_symbol in names.items():
+            assert getattr(old, old_symbol) is getattr(new, new_symbol)
+        namespace = {}
+        exec("from pirate_frb." + old_name + " import *", namespace)
+        assert all(name in namespace for name in old.__all__)
+    config = importlib.import_module("pirate_frb.GrouperConfig")
+    clustering = importlib.import_module("pirate_frb.Clustering")
+    assert config.ClusteringConfig is not clustering.ClusteringTolerances
+    runner = importlib.import_module("pirate_frb.run_offline_grouper")
+    pipeline = importlib.import_module("pirate_frb.GrouperPipeline")
+    assert runner.GroupingWindow is pipeline.ClusteringWindow
+    main = importlib.import_module("pirate_frb.__main__")
+    parser = main.get_parser()
+    assert parser.parse_args(["test", "--grouper", "-n", "1"]).grouper
+    assert parser.parse_args(["test", "--ofg", "-n", "1"]).grouper

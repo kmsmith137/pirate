@@ -19,7 +19,7 @@ to install the native dependencies, CuPy, and ksgpu first. From this checkout:
 ```bash
 git submodule update --init --recursive
 make -j 32
-python -m pirate_frb test --live --ofg -n 1
+python -m pirate_frb test --live --grouper -n 1
 ```
 
 The focused checks cover live recipe/command wiring and offline extraction,
@@ -28,6 +28,11 @@ grouping, and packaging. They include GPU tests. To run a broader smoke test:
 ```bash
 python -m pirate_frb test -n 1
 ```
+
+## Grouper implementation
+
+See the [module guide](notes/grouper_modules.md) for the shared processing stages,
+configuration types and import names.
 
 ## Examples
 

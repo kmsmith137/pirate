@@ -7,20 +7,20 @@ import textwrap
 
 import numpy as np
 
-from ..OfflineCandidateGrouper import (
+from ..Clustering import (
     GpuDecodedCandidates,
-    GroupingConfig,
-    GroupingGeometry,
+    ClusteringTolerances,
+    ClusteringGeometry,
     compatible_with_representative,
-    group_candidates,
+    cluster_candidates,
 )
-from ..Peakfinders import EdgeFlag
+from ..BowtiePeakfinding import EdgeFlag
 
 
 def _geometry(cp):
     """Return four trees spanning two primary-tree families."""
 
-    return GroupingGeometry(
+    return ClusteringGeometry(
         ntrees=4,
         primary_tree_index_by_tree=cp.asarray([0, 0, 1, 0], cp.int32),
         dm_step_by_tree=cp.asarray([1.0, 2.0, 1.0, 4.0], cp.float64),
@@ -108,7 +108,7 @@ def test_pair_compatibility_physical_boundaries(cuda_device_id=0):
             0,
             cp.arange(1, len(candidates), dtype=cp.int64),
             geometry,
-            GroupingConfig(dm_tolerance_bins=1.5, time_padding_bins=1.0),
+            ClusteringTolerances(dm_tolerance_bins=1.5, time_padding_bins=1.0),
         )
         assert np.array_equal(
             cp.asnumpy(match),
@@ -135,7 +135,7 @@ def test_greedy_grouping_tree_choice_and_isolation(cuda_device_id=0):
             {"tree": 2, "snr": 21.0, "dm": 100.0, "toa": 1000.0},
             {"tree": 3, "snr": 20.0, "dm": 100.0, "toa": 1100.0},
         ])
-        grouped = group_candidates(candidates, geometry)
+        grouped = cluster_candidates(candidates, geometry)
         event_id = cp.asnumpy(grouped.candidate_event_id)
         assert event_id[0] == event_id[1] == event_id[3]
         assert event_id[2] != event_id[0]
@@ -170,7 +170,7 @@ def test_grouping_across_chunks_uses_absolute_toa(cuda_device_id=0):
                 "snr": 18.0, "dm": 42.1, "toa": 1024.0,
             },
         ])
-        grouped = group_candidates(candidates, geometry)
+        grouped = cluster_candidates(candidates, geometry)
         assert len(grouped.events) == 1
         assert len(grouped.members) == 2
         assert np.array_equal(
@@ -201,7 +201,7 @@ def test_grouping_preserves_representative_and_member_startup_flags(
                 "dm": 100.0, "toa": 1000.0, "edge_flags": startup,
             },
         ])
-        grouped = group_candidates(candidates, geometry)
+        grouped = cluster_candidates(candidates, geometry)
 
         assert cp.asnumpy(grouped.events.edge_flags).tolist() == [0, startup]
         first_members = cp.asnumpy(
@@ -225,7 +225,7 @@ def test_grouping_empty_and_gpu_residency(cuda_device_id=0):
     with cp.cuda.Device(cuda_device_id):
         geometry = _geometry(cp)
         empty = _candidates(cp, geometry, [])
-        grouped = group_candidates(empty, geometry)
+        grouped = cluster_candidates(empty, geometry)
         assert len(grouped.events) == 0
         assert len(grouped.members) == 0
         assert int(grouped.candidate_event_id.size) == 0
@@ -234,7 +234,7 @@ def test_grouping_empty_and_gpu_residency(cuda_device_id=0):
         assert grouped.input_candidate_index.dtype == cp.int64
         assert int(grouped.input_candidate_index.size) == 0
 
-        source = textwrap.dedent(inspect.getsource(group_candidates))
+        source = textwrap.dedent(inspect.getsource(cluster_candidates))
         assert "asnumpy" not in source and ".get(" not in source
         assert "N * N" not in source and "N, N" not in source
         tree = ast.parse(source)
@@ -243,7 +243,7 @@ def test_grouping_empty_and_gpu_residency(cuda_device_id=0):
             for node in ast.walk(tree)
         )
         assert source.count("_raw_grouping_kernel(") == 1
-        module_source = inspect.getsource(inspect.getmodule(group_candidates))
+        module_source = inspect.getsource(inspect.getmodule(cluster_candidates))
         assert "%globaltimer" in module_source
         assert "atomicCAS(\n                launch_deadline_ns" in module_source
         assert "test_timeout_after_work_tiles" in module_source
@@ -253,7 +253,7 @@ def test_grouping_empty_and_gpu_residency(cuda_device_id=0):
 def _timeout_geometry(cp):
     """Return two compatible trees in one persistent-kernel partition."""
 
-    return GroupingGeometry(
+    return ClusteringGeometry(
         ntrees=2,
         primary_tree_index_by_tree=cp.asarray([0, 0], cp.int32),
         dm_step_by_tree=cp.asarray([1.0, 1.0], cp.float64),
@@ -308,7 +308,7 @@ def test_timeout_discards_in_progress_event_and_rebases_indices(
             for i in range(299)
         ] + [{"tree": 1, "snr": 1.0, "dm": 0.0, "toa": 0.0}]
         candidates = _candidates(cp, geometry, rows)
-        partial = group_candidates(
+        partial = cluster_candidates(
             candidates,
             geometry,
             _test_timeout_after_work_tiles=3,
@@ -332,7 +332,7 @@ def test_timeout_discards_in_progress_event_and_rebases_indices(
 
         # The deterministic hook and integer winner selection produce the same
         # clean partial tables on every execution.
-        repeated = group_candidates(
+        repeated = cluster_candidates(
             candidates,
             geometry,
             _test_timeout_after_work_tiles=3,
@@ -353,7 +353,7 @@ def test_timeout_before_first_commit_returns_typed_empty_partial(
             {"tree": i % 2, "snr": 500.0 - i, "dm": 0.0, "toa": 0.0}
             for i in range(300)
         ]
-        partial = group_candidates(
+        partial = cluster_candidates(
             _candidates(cp, geometry, rows),
             geometry,
             _test_timeout_after_work_tiles=1,
@@ -380,7 +380,7 @@ def test_timeout_after_final_commit_remains_explicit(cuda_device_id=0):
             {"tree": 0, "snr": 20.0, "dm": 0.0, "toa": 0.0},
             {"tree": 1, "snr": 10.0, "dm": 0.0, "toa": 0.0},
         ])
-        partial = group_candidates(
+        partial = cluster_candidates(
             candidates,
             geometry,
             _test_timeout_after_committed_events=1,
@@ -400,14 +400,14 @@ def test_timeout_defaults_validation_and_complete_input_mapping(
     import cupy as cp
 
     with cp.cuda.Device(cuda_device_id):
-        assert GroupingConfig().dm_tolerance_bins == 1.5
-        assert GroupingConfig().time_padding_bins == 1.5
+        assert ClusteringTolerances().dm_tolerance_bins == 1.5
+        assert ClusteringTolerances().time_padding_bins == 1.5
         geometry = _timeout_geometry(cp)
         candidates = _candidates(cp, geometry, [
             {"tree": 0, "snr": 20.0},
             {"tree": 1, "snr": 10.0},
         ])
-        complete = group_candidates(candidates, geometry, timeout_ms=0)
+        complete = cluster_candidates(candidates, geometry, timeout_ms=0)
         assert complete.complete is True
         assert complete.timed_out is False
         assert cp.asnumpy(complete.input_candidate_index).tolist() == [0, 1]
@@ -422,7 +422,7 @@ def test_timeout_defaults_validation_and_complete_input_mapping(
         )
         for value, error_type in invalid:
             try:
-                group_candidates(candidates, geometry, timeout_ms=value)
+                cluster_candidates(candidates, geometry, timeout_ms=value)
             except error_type:
                 pass
             else:
@@ -449,7 +449,7 @@ def test_grouping_rejects_noncurrent_owning_device(cuda_device_id=0):
         ])
     with cp.cuda.Device(other):
         try:
-            group_candidates(candidates, geometry)
+            cluster_candidates(candidates, geometry)
         except ValueError as exc:
             assert "current CUDA device" in str(exc)
         else:

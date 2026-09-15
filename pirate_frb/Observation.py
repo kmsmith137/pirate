@@ -9,7 +9,7 @@ import time
 import numpy as np
 import yaml
 
-from .OfflineGrouperConfig import OfflineGrouperConfig, _StrictSafeLoader
+from .GrouperConfig import GrouperConfig, _StrictSafeLoader
 
 SCHEMA_VERSION = 1
 CHORD_ZONE_EDGES = [300, 350, 450, 600, 800, 1500]
@@ -64,7 +64,7 @@ def validate_recipe(config):
         raise ValueError("beam count must be divisible by beams_per_batch")
     if len(beams) < overrides["beams_per_batch"] * overrides["num_active_batches"]:
         raise ValueError("beam count must cover the active beam batch capacity")
-    OfflineGrouperConfig.from_mapping(config["grouper"])
+    GrouperConfig.from_mapping(config["grouper"])
     if config["grouper"]["execution"]["beam_batch_size"] != overrides["beams_per_batch"]:
         raise ValueError("grouper beam_batch_size must match the producer beams_per_batch")
     bursts = config["bursts"]

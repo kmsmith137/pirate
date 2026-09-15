@@ -5,8 +5,8 @@ import tempfile
 
 import numpy as np
 
-from ..OfflineCandidateGrouper import group_candidates
-from ..Peakfinders import EdgeFlag
+from ..Clustering import cluster_candidates
+from ..BowtiePeakfinding import EdgeFlag
 from ..ArgmaxMetadata import ARGMAX_ENCODING
 from ..TriggerCatalog import (
     CATALOG_FORMAT,
@@ -17,14 +17,14 @@ from ..TriggerCatalog import (
     validate_trigger_catalog_tree,
     write_trigger_catalog,
 )
-from .test_offline_candidate_grouper import _candidates, _geometry
+from .test_clustering import _candidates, _geometry
 
 
 def _grouped_batches(cp):
     """Return two final GPU results with distinct beams and chunks."""
 
     geometry = _geometry(cp)
-    first = group_candidates(_candidates(cp, geometry, [
+    first = cluster_candidates(_candidates(cp, geometry, [
         {
             "beam_id": 100, "tree": 0, "source_chunk_index": 2,
             "snr": 20.0, "dm": 50.0, "toa": 4095.75,
@@ -37,7 +37,7 @@ def _grouped_batches(cp):
             "edge_flags": int(EdgeFlag.STARTUP_INCOMPLETE),
         },
     ]), geometry)
-    second = group_candidates(_candidates(cp, geometry, [
+    second = cluster_candidates(_candidates(cp, geometry, [
         {
             "beam_id": 101, "tree": 0, "source_chunk_index": 7,
             "snr": 16.0, "dm": 80.0, "toa": 9000.0,

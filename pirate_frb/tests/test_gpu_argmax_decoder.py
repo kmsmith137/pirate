@@ -10,7 +10,7 @@ from ..GpuArgmaxDecoder import (
     GpuArgmaxDecodeError,
     GpuArgmaxDecoder,
 )
-from ..Peakfinders import EdgeFlag, GpuRawCandidates
+from ..BowtiePeakfinding import EdgeFlag, GpuRawCandidates
 from ..pirate_pybind11 import DedispersionConfig, DedispersionPlan
 
 

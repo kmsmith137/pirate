@@ -1,12 +1,12 @@
-"""Host-only schema and CLI tests for offline-grouper configuration."""
+"""Host-only schema and CLI tests for shared grouper configuration."""
 
 import copy
 import tempfile
 from pathlib import Path
 
-from ..OfflineGrouperConfig import (
-    OfflineGrouperConfig,
-    OfflineGrouperConfigError,
+from ..GrouperConfig import (
+    GrouperConfig,
+    GrouperConfigError,
 )
 
 
@@ -32,17 +32,17 @@ def _valid_mapping():
 
 def _expect_invalid(value, expected_text):
     try:
-        OfflineGrouperConfig.from_mapping(value)
-    except OfflineGrouperConfigError as exc:
+        GrouperConfig.from_mapping(value)
+    except GrouperConfigError as exc:
         assert expected_text in str(exc)
     else:
         raise AssertionError(f"invalid configuration was accepted: {value!r}")
 
 
-def test_offline_grouper_config_accepts_exact_schema():
+def test_grouper_config_accepts_exact_schema():
     """Every public value is typed and exposed through immutable sections."""
 
-    config = OfflineGrouperConfig.from_mapping(_valid_mapping())
+    config = GrouperConfig.from_mapping(_valid_mapping())
     assert config.peakfinding.snr_threshold == 10.0
     assert config.peakfinding.dm_reach == 8
     assert config.peakfinding.waist_bins == 1
@@ -60,12 +60,12 @@ def test_offline_grouper_config_accepts_exact_schema():
     alternate["grouping"]["dm_tolerance"] = 0
     alternate["grouping"]["time_tolerance"] = 0
     alternate["execution"]["timeout_policy"] = "emit_partial"
-    parsed = OfflineGrouperConfig.from_mapping(alternate)
+    parsed = GrouperConfig.from_mapping(alternate)
     assert parsed.peakfinding.snr_threshold == -3.0
     assert parsed.execution.timeout_policy == "emit_partial"
 
 
-def test_offline_grouper_config_rejects_schema_drift_and_bad_values():
+def test_grouper_config_rejects_schema_drift_and_bad_values():
     """Missing/unknown fields, booleans, nonfinite values, and ranges fail."""
 
     missing_section = _valid_mapping()
@@ -104,7 +104,7 @@ def test_offline_grouper_config_rejects_schema_drift_and_bad_values():
         _expect_invalid(value, message)
 
 
-def test_offline_grouper_config_uses_safe_strict_yaml():
+def test_grouper_config_uses_safe_strict_yaml():
     """Files load normally while unsafe tags and duplicate keys are rejected."""
 
     valid_yaml = """\
@@ -124,7 +124,7 @@ execution:
     with tempfile.TemporaryDirectory(prefix="pirate-grouper-config-") as tmp:
         filename = Path(tmp) / "config.yml"
         filename.write_text(valid_yaml, encoding="utf-8")
-        config = OfflineGrouperConfig.from_yaml(filename)
+        config = GrouperConfig.from_yaml(filename)
         assert config.grouping.halo_size == 3
         assert config.execution.timeout_ms == 250
 
@@ -135,8 +135,8 @@ execution:
             encoding="utf-8",
         )
         try:
-            OfflineGrouperConfig.from_yaml(filename)
-        except OfflineGrouperConfigError as exc:
+            GrouperConfig.from_yaml(filename)
+        except GrouperConfigError as exc:
             assert "duplicate configuration key 'dm_reach'" in str(exc)
         else:
             raise AssertionError("duplicate YAML key was accepted")
@@ -146,9 +146,9 @@ execution:
             encoding="utf-8",
         )
         try:
-            OfflineGrouperConfig.from_yaml(filename)
-        except OfflineGrouperConfigError as exc:
-            assert "invalid offline-grouper YAML" in str(exc)
+            GrouperConfig.from_yaml(filename)
+        except GrouperConfigError as exc:
+            assert "invalid grouper YAML" in str(exc)
         else:
             raise AssertionError("unsafe YAML constructor was accepted")
 
