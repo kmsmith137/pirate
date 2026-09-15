@@ -36,23 +36,24 @@ documentation snapshots (do not edit them by hand; regenerate by running
   Production configs are also used by the build system (`makefile_helper.py`) to
   determine which CUDA kernels to autogenerate.
 
-- **`experiments/`** -- Observation recipes for the four-terminal live pipeline.
-  Configure beam IDs, duration, bursts and the dedispersion/grouping settings.
-  Start with [`chord_8beams.yml`](experiments/chord_8beams.yml).
-  For a smaller offline/online walkthrough, see the
-  [one-beam example](../examples/simple_frb/README.md).
-  Live commands read the recipe directly
-  and do not save input data, captures or result files.
+Observation examples are collected under [examples/](../examples/README.md):
+the [one-beam walkthrough](../examples/simple_frb/README.md) and
+[eight-beam live search](../examples/chord_8beams/README.md).
 
-- **`offline_grouper/`** -- strict peak-extraction, grouping, and execution
-  controls for `run offline_grouper`. Start from
-  [`example.yml`](offline_grouper/example.yml); all three sections and every
-  documented field are required, and unknown fields are rejected. The command
-  takes this file as its second positional argument:
+- **`grouper/`** -- shared peakfinding, clustering and execution settings for
+  offline and online processing. Start from the commented
+  [template](grouper/example.yml) for an existing acquisition:
 
   ```
-  pirate_frb run offline_grouper ACQDIR configs/offline_grouper/example.yml
+  pirate_frb run offline_grouper ACQDIR configs/grouper/example.yml
   ```
+
+  Live recipes contain the same three sections under `grouper:`. All fields
+  are required and unknown fields are rejected. The one-beam generator exports
+  this mapping as an offline `grouper.yml` snapshot automatically.
+  `execution.beam_batch_size` controls offline batches; live batches follow
+  the producer. Examples can choose different values: the template uses a
+  400 ms timeout, while the observation demos disable it.
 
   The grouper finalizes chunk `i` after receiving only the configured left
   halo from chunk `i+1`; an event is owned by `i` when any member came from

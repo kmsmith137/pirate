@@ -1,0 +1,35 @@
+# Eight-beam live FRB search
+
+For the smallest offline/online walkthrough, start with the
+[one-beam example](../simple_frb/README.md). This observation contains eight beams
+and three injected bursts: a low-DM broadband burst, a high-DM broadband burst,
+and a burst confined to 500–1000 MHz.
+
+The [recipe](observation.yml) defines the observation and Grouper settings.
+It uses the full CHORD 300–1500 MHz subband/early-trigger search, two beams per
+native batch, and 220 seconds of input rounded up to complete chunks.
+
+Follow the [installation instructions](../../notes/install.md). Run from the
+repository root, with the same environment and GPU selection in four terminals.
+Start these commands in order, one per terminal:
+
+```bash
+# Terminal 1: Grouper
+python -B -m pirate_frb live grouper examples/chord_8beams/observation.yml
+# Terminal 2: dedisperser
+python -B -m pirate_frb live dedisperser examples/chord_8beams/observation.yml
+# Terminal 3: event monitor
+python -B -m pirate_frb live event_monitor examples/chord_8beams/observation.yml
+# Terminal 4: wait for terminals 2 and 3 to print Listening.
+python -B -m pirate_frb live observation examples/chord_8beams/observation.yml
+```
+
+The event monitor prints detections. Input data, maps and catalogs are not saved.
+The full search requires substantial host and GPU memory. Wait for the Grouper's
+`Processing complete` message, then stop the dedisperser first with Ctrl-C,
+followed by the remaining Grouper and event monitor. Restart all four processes
+for another observation. Ports 19700–19703 must be free; use the same `--base-port`
+in all commands to select another range.
+
+See [shared Grouper settings](../README.md#shared-grouper-settings) for how the
+same configuration is used offline and online.

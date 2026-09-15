@@ -205,7 +205,7 @@ def run_offline_grouper(
         Directory containing version-3 offline-dedisperser S/N-map ASDF files.
     config_file : path-like
         Required strict YAML file with exactly ``peakfinding``, ``grouping``,
-        and ``execution`` sections.  See ``configs/offline_grouper/example.yml``.
+        and ``execution`` sections.  See ``configs/grouper/example.yml``.
     max_chunks : int or None, optional
         Process only a leading prefix per compatible beam stream.  Its final
         unresolved owner is not flushed or falsely treated as a physical edge.

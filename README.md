@@ -38,7 +38,7 @@ configuration types and import names.
 
 Start with the [one-beam FRB search](examples/simple_frb/README.md): generate a
 DM 500, sigma 1 ms, S/N 50 broadband burst, save its offline maps and grouped
-events, then run the same observation online. See [all examples](examples/README.md).
+events, then run the same observation online. Both observation examples are under [examples/](examples/README.md).
 
 For classifier development, open the [classifier notebook](AIclassifier/README.md).
 It includes just the detected FRB's map chunk and catalog, and walks from the
@@ -51,13 +51,13 @@ these commands in order, one per terminal:
 
 ```bash
 # Terminal 1
-python -B -m pirate_frb live grouper configs/experiments/chord_8beams.yml
+python -B -m pirate_frb live grouper examples/chord_8beams/observation.yml
 # Terminal 2
-python -B -m pirate_frb live dedisperser configs/experiments/chord_8beams.yml
+python -B -m pirate_frb live dedisperser examples/chord_8beams/observation.yml
 # Terminal 3
-python -B -m pirate_frb live event_monitor configs/experiments/chord_8beams.yml
+python -B -m pirate_frb live event_monitor examples/chord_8beams/observation.yml
 # Terminal 4: wait for the dedisperser and event monitor to print "Listening".
-python -B -m pirate_frb live observation configs/experiments/chord_8beams.yml
+python -B -m pirate_frb live observation examples/chord_8beams/observation.yml
 ```
 
 The recipe generates eight beams with three injected bursts. The event monitor
@@ -68,15 +68,19 @@ Ctrl-C, followed by any remaining grouper and event-monitor processes.
 
 All four processes use loopback ports 19700-19703. To run another instance, pass
 the same unused `--base-port` to all four commands. See the
-[recipe](configs/experiments/chord_8beams.yml) for duration, beam, burst, and
+[recipe](examples/chord_8beams/observation.yml) for duration, beam, burst, and
 grouping settings; the CHORD configuration requires substantial host and GPU memory.
 
 ## Offline processing
 
+The Grouper settings and parser are shared with online processing. The one-beam
+generator exports its recipe settings as an offline `grouper.yml` snapshot.
+See [shared Grouper settings](examples/README.md#shared-grouper-settings).
+
 For an existing ASDF acquisition, run:
 
 ```bash
-python -m pirate_frb run offline_grouper ACQDIR configs/offline_grouper/example.yml
+python -m pirate_frb run offline_grouper ACQDIR configs/grouper/example.yml
 ```
 
 See the [configuration guide](configs/README.md) and

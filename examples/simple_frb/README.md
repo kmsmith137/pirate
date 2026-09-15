@@ -5,6 +5,10 @@ This example searches one beam for a single simulated FRB. Both paths use
 pulse generator. Start with the offline steps to see the saved data products,
 then run the observation through the online pipeline.
 
+The `grouper:` section of `observation.yml` supplies both paths. The generator
+exports it as an offline `grouper.yml` snapshot automatically. See
+[shared Grouper settings](../README.md#shared-grouper-settings).
+
 | Parameter | Value |
 | --- | --- |
 | Beam ID | 1 |

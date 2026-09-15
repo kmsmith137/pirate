@@ -30,10 +30,10 @@ dedisperser first with Ctrl-C, then the grouper and event monitor.
 From the repository root, use the following commands, one per terminal:
 
 ```bash
-python -B -m pirate_frb live grouper configs/experiments/chord_8beams.yml
-python -B -m pirate_frb live dedisperser configs/experiments/chord_8beams.yml
-python -B -m pirate_frb live event_monitor configs/experiments/chord_8beams.yml
-python -B -m pirate_frb live observation configs/experiments/chord_8beams.yml
+python -B -m pirate_frb live grouper examples/chord_8beams/observation.yml
+python -B -m pirate_frb live dedisperser examples/chord_8beams/observation.yml
+python -B -m pirate_frb live event_monitor examples/chord_8beams/observation.yml
+python -B -m pirate_frb live observation examples/chord_8beams/observation.yml
 ```
 
 The default loopback ports are 19700-19703. Supply the same `--base-port`
@@ -46,7 +46,18 @@ and arrival time relative to the observation start. The observation's
 `Sending complete` message precedes the grouper's `Processing complete`
 message; wait for the latter before stopping the pipeline.
 
-## Offline grouper configuration
+## Shared Grouper configuration
+
+Offline and online use the same `GrouperConfig` schema and processing rules.
+In the one-beam example, edit the `grouper:` section in `observation.yml`.
+The offline generator exports that mapping to `grouper.yml` beside the generated
+data; this is a snapshot, not a second configuration to maintain. Live commands
+read the observation recipe directly. If you change the recipe after generation,
+regenerate the offline data or use the saved `observation.yml` online.
+
+`execution.beam_batch_size` controls offline beam batches. Online batches follow
+the producer's `dedispersion_overrides.beams_per_batch`. The peakfinding, halo,
+DM/time tolerances and timeout settings have the same meaning in both paths.
 
 `run offline_grouper` takes an acquisition directory and a strict YAML file:
 
@@ -57,7 +68,7 @@ pirate_frb run offline_grouper ACQDIR CONFIG.yml
 Scientific and execution settings come only from the YAML file. The CLI keeps
 operational overrides for `--device`, `--output`, `--max-chunks`, `--verbose`,
 and `--assume-steady-state`. See the commented
-[`configs/offline_grouper/example.yml`](configs/offline_grouper/example.yml)
+[`configs/grouper/example.yml`](../../configs/grouper/example.yml)
 for a complete configuration.
 
 The top-level mapping must contain exactly these required sections and fields:

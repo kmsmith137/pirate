@@ -1,4 +1,6 @@
-# Offline candidate extraction, grouping, and bounded-wait configuration.
+# Shared peakfinding, clustering, and execution settings.
+# Offline: pass this file to run offline_grouper.
+# Online: use these sections under grouper: in the observation recipe.
 # Every section and field is required; unknown fields are rejected.
 
 peakfinding:
@@ -14,6 +16,6 @@ grouping:
   time_tolerance: 1.5  # Factor of the coarser candidate/tree time spacing.
 
 execution:
-  beam_batch_size: 1   # Maximum number of compatible beams resident together.
+  beam_batch_size: 1   # Offline beam batch limit; live batches follow the producer.
   timeout_ms: 400      # Example deadline; zero disables the timeout.
   timeout_policy: discard  # Exactly "discard" or "emit_partial".

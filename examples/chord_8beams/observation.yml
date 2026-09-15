@@ -1,7 +1,7 @@
 # Stream this eight-beam observation in memory with the four live commands.
 version: 1
-metadata: ../xengine_metadata.yml
-dedispersion: ../dedispersion/chord_sb2_et.yml
+metadata: ../../configs/xengine_metadata.yml
+dedispersion: ../../configs/dedispersion/chord_sb2_et.yml
 observation:
   duration_seconds: 220.0  # Rounded upwards to a whole number of chunks.
   initial_chunk: 0
