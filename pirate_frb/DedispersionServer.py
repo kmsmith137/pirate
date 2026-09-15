@@ -2,6 +2,8 @@
 from pathlib import Path
 import time
 
+import cupy as cp
+
 
 class DedispersionServer:
     """One real FrbServer with finite, separately sized raw and dedispersion pools."""
@@ -28,7 +30,6 @@ class DedispersionServer:
 
     def _build(self, bundle, data_address, rpc_address,
                grouper_address, cuda_device_id):
-        import cupy as cp
         import ksgpu
         from .core import (AssembledFrameAllocator, BumpAllocator, CudaStreamPool,
                            FileWriter, Receiver, SlabAllocator)

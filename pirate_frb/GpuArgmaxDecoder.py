@@ -273,7 +273,6 @@ class GpuArgmaxDecoder:
         plan.  Invalid metadata raises before a usable decoder is returned.
         """
 
-        import cupy as cp
         if cuda_device_id is None:
             cuda_device_id = cp.cuda.runtime.getDevice()
         self.cuda_device_id = int(cuda_device_id)

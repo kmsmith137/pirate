@@ -30,6 +30,7 @@ from dataclasses import dataclass, fields
 import operator
 
 import numpy as np
+import cupy as cp
 
 from .OfflineMapReader import OfflineMapReader
 from .GpuArgmaxDecoder import GpuArgmaxDecoder
@@ -236,8 +237,6 @@ def run_offline_grouper(
     # state.  Peakfinder/grouping modules import CuPy at module import time.
     configuration = load_grouper_config(config_file)
     max_chunks = _optional_nonnegative_integer(max_chunks, "max_chunks")
-
-    import cupy as cp
 
     peakfinding = configuration.peakfinding
     grouping = configuration.grouping

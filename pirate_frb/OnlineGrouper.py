@@ -7,6 +7,7 @@ import operator
 import time
 
 import numpy as np
+import cupy as cp
 
 
 def _exact_integer(value, name, *, minimum=0):
@@ -130,7 +131,6 @@ def run_online_grouper(bundle, grouper_addr, *, sifter_addr=None, progress=None)
             sifter.send_configuration(
                 g.dedispersion_config_yaml_string, g.xengine_metadata_yaml_string,
                 g.dedispersion_plan_yaml_string, bundle["grouper_config_yaml"], g.search_ip_addr)
-        import cupy as cp
         beam_ids = tuple(int(b) for b in g.xengine_metadata.beam_ids)
         processors, pending_messages, coarsegrain = [], {}, {}
 

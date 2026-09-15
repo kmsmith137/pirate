@@ -29,6 +29,7 @@ import re
 from dataclasses import dataclass
 
 import numpy as np
+import cupy as cp
 
 from .ArgmaxMetadata import (
     read_argmax_metadata, validate_snr_map_format, validate_saved_time_sample_ms,
@@ -564,7 +565,6 @@ class OfflineMapReader:
         """
 
         import asdf
-        import cupy as cp
 
         # Convert external identifiers once on the CPU; duplicate beams would
         # make the meaning of the leading map axis and candidate provenance

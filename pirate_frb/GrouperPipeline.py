@@ -12,6 +12,7 @@ from dataclasses import dataclass, fields
 import operator
 
 import numpy as np
+import cupy as cp
 
 from .GpuArgmaxDecoder import GpuArgmaxDecoder
 from .Clustering import (
@@ -302,7 +303,6 @@ class StreamingGrouper:
                  assume_steady_state=False,
                  grouping_halo_columns_by_tree=None,
                  extractor_factory=None, group_function=None):
-        import cupy as cp
         if not callable(consume_window):
             raise TypeError("consume_window must be callable")
         if timeout_policy not in ("discard", "emit_partial"):
@@ -364,7 +364,6 @@ class StreamingGrouper:
             raise RuntimeError("processor has already finished")
 
     def _group(self, owner, halo, halo_chunk):
-        import cupy as cp
         return _group_streaming_window(
             cp, owner, halo, self.previous_chunk, halo_chunk, self.decoder,
             self.grouping_geometry, self.grouping_config,
@@ -373,7 +372,6 @@ class StreamingGrouper:
 
     def process_chunk(self, snr_by_tree, argmax_by_tree, source_chunk_index):
         """Consume one consecutive source batch, emitting at most one window."""
-        import cupy as cp
         self._check_open()
         source = _optional_nonnegative_integer(source_chunk_index, "source chunk")
         if source is None:
@@ -409,7 +407,6 @@ class StreamingGrouper:
 
     def finish(self, *, physical_end):
         """Close the stream; flush only at the verified physical observation end."""
-        import cupy as cp
         self._check_open()
         if type(physical_end) is not bool:
             raise TypeError("physical_end must be bool")
