@@ -1,0 +1,16 @@
+# One primary tree and a full-band search, using existing CHORD kernels.
+# This keeps the introductory map and its tree index unambiguous.
+zone_freq_edges: [300, 350, 450, 600, 800, 1500]
+zone_nfreq: [8192, 8192, 6144, 2048, 3584]
+time_sample_ms: 0.9984
+beams_per_gpu: 1
+dtype: float16
+time_samples_per_chunk: 2048
+frequency_subband_counts: [0, 0, 0, 0, 1]
+max_gpu_clag: 5
+beams_per_batch: 1
+num_active_batches: 1
+toplevel_tree_rank: 16
+primary_trees:
+  - {num_early_triggers: 0, max_width: 32, wt_dm_downsampling: 64, wt_time_downsampling: 64}
+future_write_max_samples: 5000

@@ -58,3 +58,7 @@ docs/source/cli/
 docs/source/_cli_generated.md
 docs/source/_grpc_generated.md
 
+
+# Local Python checks and notebook tooling
+.pytest_cache/
+.ipynb_checkpoints/

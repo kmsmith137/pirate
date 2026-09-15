@@ -8,7 +8,9 @@
 
 #include <sstream>
 #include <iomanip>
+#include <cmath>       // std::fma()
 #include <algorithm>   // std::min, std::max
+#include <limits>
 #include <unordered_map>
 #include <ksgpu/xassert.hpp>
 #include <yaml-cpp/emitter.h>   // YAML::Emitter, used in to_yaml()
@@ -962,8 +964,22 @@ void DedispersionPlan::decode_argmax(
     // (one past the last full-res sample summed), i.e. the end boundary of the
     // trailing bin.
 
-    thi = (thi_ds + 1) << ipri;
-    tlo = (tlo_ds + 1) << ipri;
+    // Do not express this scaling as a left shift: tlo_ds/thi_ds are often
+    // negative, and left-shifting a negative signed value is undefined C++
+    // behaviour. The bounds are tiny in every valid plan, but keep the
+    // multiplication explicitly checked so this remains true if plan limits
+    // change later.
+    xassert_lt(thi_ds, std::numeric_limits<long>::max());
+    xassert_lt(tlo_ds, std::numeric_limits<long>::max());
+    long thi_edge_ds = thi_ds + 1;
+    long tlo_edge_ds = tlo_ds + 1;
+    long time_scale = pow2(ipri);
+    xassert((thi_edge_ds >= std::numeric_limits<long>::min() / time_scale)
+            && (thi_edge_ds <= std::numeric_limits<long>::max() / time_scale));
+    xassert((tlo_edge_ds >= std::numeric_limits<long>::min() / time_scale)
+            && (tlo_edge_ds <= std::numeric_limits<long>::max() / time_scale));
+    thi = thi_edge_ds * time_scale;
+    tlo = tlo_edge_ds * time_scale;
 }
 
 
@@ -1029,7 +1045,13 @@ void DedispersionPlan::decode_argmax2(
     freq_lo_MHz = config.delay_to_frequency(fmax+1);
     freq_hi_MHz = config.delay_to_frequency(fmin);
     dm = dslope * ntree * config.dm_per_unit_delay();
-    timestamp_samp = thi + dslope * (ntree-0.5-fmax) - pf_shift;
+    // Preserve the decoder's established two-rounding operation order: first
+    // round (dslope * extrapolation + thi) as one FMA, then separately round
+    // the peak-finder-centre subtraction.  Moving pf_shift into the FMA addend
+    // changes real-plan timestamps by one ULP.
+    double extrapolation = double(ntree) - 0.5 - double(fmax);
+    double dispersed_timestamp = std::fma(dslope, extrapolation, double(thi));
+    timestamp_samp = dispersed_timestamp - pf_shift;
     width_samp = pf_width;
 }
 

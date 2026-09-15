@@ -573,10 +573,10 @@ void FrbGrouper::_process_handshake(const fg::Handshake &hs)
     xassert_eq(hs.beams_per_batch(), beams_per_batch);
     // The output ring buffer's leading (beam) axis is num_batch_slots *
     // beams_per_batch (== producer nbatches_out * beams_per_batch), NOT
-    // total_beams. It is <= total_beams (beams_per_gpu); equality holds only in
-    // the degenerate case num_active_batches == beams_per_gpu/beams_per_batch.
+    // total_beams. Slots can span multiple time chunks, including a two-slot
+    // ring for a single beam. acquire_output() recovers beam/chunk identity
+    // from seq_id independently of the ring slot.
     long ring_nbeams = num_batch_slots * beams_per_batch;
-    xassert_le(ring_nbeams, total_beams);
     xassert_eq(hs.arrays_size(), int(2 * ntrees));   // out_max + out_argmax per tree
 
     // Open the IPC handle ONCE; wrap as a shared_ptr<void> whose deleter closes

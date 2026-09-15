@@ -1,0 +1,50 @@
+# Stream this eight-beam observation in memory with the four live commands.
+version: 1
+metadata: ../../configs/xengine_metadata.yml
+dedispersion: ../../configs/dedispersion/chord_sb2_et.yml
+observation:
+  duration_seconds: 220.0  # Rounded upwards to a whole number of chunks.
+  initial_chunk: 0
+  beam_ids: [1, 2, 3, 4, 5, 6, 7, 8]
+  noise_seed: 137
+dedispersion_overrides:
+  beams_per_batch: 2
+  num_active_batches: 1
+bursts:
+  - id: low_dm
+    role: low_dm_test
+    beam_id: 1
+    dm: 100.0
+    toa_seconds: 90.0
+    reference_frequency_MHz: 300.0
+    width_ms: 2.0  # Intrinsic Gaussian sigma; not a recovered boxcar width.
+    snr: 50.0
+    spectral_index: 0.0
+    subband_lo_MHz: 300.0
+    subband_hi_MHz: 1500.0
+  - id: high_dm
+    role: early_trigger
+    beam_id: 8
+    dm: 2000.0
+    toa_seconds: 200.0
+    reference_frequency_MHz: 300.0
+    width_ms: 4.0
+    snr: 50.0
+    spectral_index: 0.0
+    subband_lo_MHz: 300.0
+    subband_hi_MHz: 1500.0
+  - id: narrow_band
+    role: narrow_band_test
+    beam_id: 5
+    dm: 550.0
+    toa_seconds: 50.0
+    reference_frequency_MHz: 300.0
+    width_ms: 5.0  # Intrinsic Gaussian sigma; not a recovered boxcar width.
+    snr: 50.0
+    spectral_index: 0.0
+    subband_lo_MHz: 500.0
+    subband_hi_MHz: 1000.0
+grouper:
+  peakfinding: {snr_threshold: 10.0, dm_reach: 8, waist_bins: 1}
+  grouping: {halo_size: 2, dm_tolerance: 1.5, time_tolerance: 1.5}
+  execution: {beam_batch_size: 2, timeout_ms: 0, timeout_policy: discard}

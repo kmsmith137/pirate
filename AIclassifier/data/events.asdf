@@ -1,0 +1,492 @@
+#ASDF 1.0.0
+#ASDF_STANDARD 1.6.0
+%YAML 1.1
+%TAG ! tag:stsci.edu:asdf/
+--- !core/asdf-1.1.0
+asdf_library: !core/software-1.0.0 {author: The ASDF Developers, homepage: 'http://github.com/asdf-format/asdf',
+  name: asdf, version: 5.3.0}
+history:
+  extensions:
+  - !core/extension_metadata-1.0.0
+    extension_class: asdf.extension._manifest.ManifestExtension
+    extension_uri: asdf://asdf-format.org/core/extensions/core-1.6.0
+    manifest_software: !core/software-1.0.0 {name: asdf_standard, version: 1.5.0}
+    software: !core/software-1.0.0 {name: asdf, version: 5.3.0}
+coverage:
+  beam_id: !core/ndarray-1.1.0
+    source: 41
+    datatype: int32
+    byteorder: little
+    shape: [32]
+  source_chunk_index: !core/ndarray-1.1.0
+    source: 42
+    datatype: int64
+    byteorder: little
+    shape: [32]
+events:
+  argmax_token: !core/ndarray-1.1.0
+    source: 17
+    datatype: uint32
+    byteorder: little
+    shape: [1]
+  beam_id: !core/ndarray-1.1.0
+    source: 5
+    datatype: int32
+    byteorder: little
+    shape: [1]
+  dm: !core/ndarray-1.1.0
+    source: 11
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  edge_flags: !core/ndarray-1.1.0
+    source: 18
+    datatype: uint8
+    byteorder: big
+    shape: [1]
+  event_id: !core/ndarray-1.1.0
+    source: 0
+    datatype: int64
+    byteorder: little
+    shape: [1]
+  freq_hi_MHz: !core/ndarray-1.1.0
+    source: 16
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  freq_lo_MHz: !core/ndarray-1.1.0
+    source: 15
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  grouping_timed_out: !core/ndarray-1.1.0
+    source: 19
+    datatype: bool8
+    byteorder: big
+    shape: [1]
+  grouping_window_id: !core/ndarray-1.1.0
+    source: 3
+    datatype: int64
+    byteorder: little
+    shape: [1]
+  idm: !core/ndarray-1.1.0
+    source: 8
+    datatype: int32
+    byteorder: little
+    shape: [1]
+  itime: !core/ndarray-1.1.0
+    source: 9
+    datatype: int32
+    byteorder: little
+    shape: [1]
+  member_count: !core/ndarray-1.1.0
+    source: 4
+    datatype: int32
+    byteorder: little
+    shape: [1]
+  primary_tree_index: !core/ndarray-1.1.0
+    source: 6
+    datatype: int32
+    byteorder: little
+    shape: [1]
+  representative_candidate_id: !core/ndarray-1.1.0
+    source: 1
+    datatype: int64
+    byteorder: little
+    shape: [1]
+  snr: !core/ndarray-1.1.0
+    source: 10
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  source_chunk_index: !core/ndarray-1.1.0
+    source: 2
+    datatype: int64
+    byteorder: little
+    shape: [1]
+  toa_sample_abs: !core/ndarray-1.1.0
+    source: 12
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  tree: !core/ndarray-1.1.0
+    source: 7
+    datatype: int32
+    byteorder: little
+    shape: [1]
+  width_ms: !core/ndarray-1.1.0
+    source: 14
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  width_samp: !core/ndarray-1.1.0
+    source: 13
+    datatype: float64
+    byteorder: little
+    shape: [1]
+format: pirate_frb.offline_candidate_catalog
+format_version: 3
+members:
+  argmax_token: !core/ndarray-1.1.0
+    source: 38
+    datatype: uint32
+    byteorder: little
+    shape: [1]
+  beam_id: !core/ndarray-1.1.0
+    source: 24
+    datatype: int32
+    byteorder: little
+    shape: [1]
+  candidate_id: !core/ndarray-1.1.0
+    source: 20
+    datatype: int64
+    byteorder: little
+    shape: [1]
+  dm: !core/ndarray-1.1.0
+    source: 30
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  dm_step: !core/ndarray-1.1.0
+    source: 36
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  edge_flags: !core/ndarray-1.1.0
+    source: 39
+    datatype: uint8
+    byteorder: big
+    shape: [1]
+  event_id: !core/ndarray-1.1.0
+    source: 21
+    datatype: int64
+    byteorder: little
+    shape: [1]
+  freq_hi_MHz: !core/ndarray-1.1.0
+    source: 35
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  freq_lo_MHz: !core/ndarray-1.1.0
+    source: 34
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  grouping_timed_out: !core/ndarray-1.1.0
+    source: 40
+    datatype: bool8
+    byteorder: big
+    shape: [1]
+  grouping_window_id: !core/ndarray-1.1.0
+    source: 23
+    datatype: int64
+    byteorder: little
+    shape: [1]
+  idm: !core/ndarray-1.1.0
+    source: 27
+    datatype: int32
+    byteorder: little
+    shape: [1]
+  itime: !core/ndarray-1.1.0
+    source: 28
+    datatype: int32
+    byteorder: little
+    shape: [1]
+  primary_tree_index: !core/ndarray-1.1.0
+    source: 25
+    datatype: int32
+    byteorder: little
+    shape: [1]
+  snr: !core/ndarray-1.1.0
+    source: 29
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  source_chunk_index: !core/ndarray-1.1.0
+    source: 22
+    datatype: int64
+    byteorder: little
+    shape: [1]
+  time_step_samples: !core/ndarray-1.1.0
+    source: 37
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  toa_sample_abs: !core/ndarray-1.1.0
+    source: 31
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  tree: !core/ndarray-1.1.0
+    source: 26
+    datatype: int32
+    byteorder: little
+    shape: [1]
+  width_ms: !core/ndarray-1.1.0
+    source: 33
+    datatype: float64
+    byteorder: little
+    shape: [1]
+  width_samp: !core/ndarray-1.1.0
+    source: 32
+    datatype: float64
+    byteorder: little
+    shape: [1]
+metadata:
+  grouping_windows:
+  - beam_ids: [1]
+    grouping_window_id: 0
+    output_status: complete
+    owner_source_chunk_index: 0
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 1
+    output_status: complete
+    owner_source_chunk_index: 1
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 2
+    output_status: complete
+    owner_source_chunk_index: 2
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 3
+    output_status: complete
+    owner_source_chunk_index: 3
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 4
+    output_status: complete
+    owner_source_chunk_index: 4
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 5
+    output_status: complete
+    owner_source_chunk_index: 5
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 6
+    output_status: complete
+    owner_source_chunk_index: 6
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 7
+    output_status: complete
+    owner_source_chunk_index: 7
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 8
+    output_status: complete
+    owner_source_chunk_index: 8
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 9
+    output_status: complete
+    owner_source_chunk_index: 9
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 10
+    output_status: complete
+    owner_source_chunk_index: 10
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 11
+    output_status: complete
+    owner_source_chunk_index: 11
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 12
+    output_status: complete
+    owner_source_chunk_index: 12
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 13
+    output_status: complete
+    owner_source_chunk_index: 13
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 14
+    output_status: complete
+    owner_source_chunk_index: 14
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 15
+    output_status: complete
+    owner_source_chunk_index: 15
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 16
+    output_status: complete
+    owner_source_chunk_index: 16
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 17
+    output_status: complete
+    owner_source_chunk_index: 17
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 18
+    output_status: complete
+    owner_source_chunk_index: 18
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 19
+    output_status: complete
+    owner_source_chunk_index: 19
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 20
+    output_status: complete
+    owner_source_chunk_index: 20
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 21
+    output_status: complete
+    owner_source_chunk_index: 21
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 22
+    output_status: complete
+    owner_source_chunk_index: 22
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 23
+    output_status: complete
+    owner_source_chunk_index: 23
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 24
+    output_status: complete
+    owner_source_chunk_index: 24
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 25
+    output_status: complete
+    owner_source_chunk_index: 25
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 26
+    output_status: complete
+    owner_source_chunk_index: 26
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 27
+    output_status: complete
+    owner_source_chunk_index: 27
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 28
+    output_status: complete
+    owner_source_chunk_index: 28
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 29
+    output_status: complete
+    owner_source_chunk_index: 29
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 30
+    output_status: complete
+    owner_source_chunk_index: 30
+    timed_out: false
+  - beam_ids: [1]
+    grouping_window_id: 31
+    output_status: complete
+    owner_source_chunk_index: 31
+    timed_out: false
+  pipeline: offline
+  processing:
+    beam_batch_size: 1
+    complete: true
+    dm_reach_by_tree: [8]
+    dm_tolerance: 1.5
+    effective_grouping_halo_columns_by_tree: [18]
+    grouping_association_domain: owner_plus_resolved_next_map_halo
+    grouping_method: persistent_partition_representative
+    halo_size: 2
+    peakfinder: full_band
+    requested_time_radius_by_tree: [9]
+    snr_threshold: 10.0
+    time_radius_by_tree: [9]
+    time_tolerance: 1.5
+    timeout_ms: 0
+    timeout_policy: discard
+    waist_bins_by_tree: [1]
+  producer:
+    argmax_encoding: pirate-1.5:t8-p8-m8-mu8
+    config_yaml: "zone_nfreq: [8192, 8192, 6144, 2048, 3584]\nzone_freq_edges: [300,
+      350, 450, 600, 800, 1500]\ntime_sample_ms: 0.99839999999999995\ntoplevel_tree_rank:
+      16\ntime_samples_per_chunk: 2048\ndtype: float16\nfrequency_subband_counts:
+      [0, 0, 0, 0, 1]\nprimary_trees:\n  - {num_early_triggers: 0, max_width: 32,
+      wt_dm_downsampling: 64, wt_time_downsampling: 64}\nbeams_per_gpu: 1\nbeams_per_batch:
+      1\nnum_active_batches: 1\nfuture_write_max_samples: 5000\nmax_gpu_clag: 5"
+    dcores: [8]
+    plan_yaml: "dtype: float16\nnfreq: 28160\nnt_in: 2048\ntoplevel_tree_rank: 16\nnum_primary_trees:
+      1\nbeams_per_gpu: 1\nbeams_per_batch: 1\nnum_active_batches: 1\nstage1_dd_rank:
+      [8]\nstage1_amb_rank: [8]\nntrees: 1\n\ntrees:\n\n  - tree_index: 0\n    ndm_out:
+      4096\n    nt_out: 128\n    dm_min: 0\n    dm_max: 1478.5378354457471\n    trigger_frequency:
+      300\n    primary_tree_index: 0\n    early_trigger_level: 0\n    amb_rank: 8\n
+      \   dd_rank: 8\n    nt_ds: 2048\n    max_width: 32\n    dm_downsampling: 16\n
+      \   time_downsampling: 16\n    nprofiles: 16\n    wt_dm_downsampling: 64\n    wt_time_downsampling:
+      64\n    ndm_wt: 1024\n    nt_wt: 32\n    frequency_subband_counts: [0, 0, 0,
+      0, 1]\n\nmega_ringbuf:\n  host_zones: 1.85 GiB\n  gpu_zones: 0.64 GiB\n  h2g
+      bandwidth: 0.068 GB/s\n  g2h bandwidth: 0.068 GB/s\n  et_h2h bandwidth: 0.000
+      GB/s\n  max_clag: 32\n  max_gpu_clag: 5\n  min_host_clag: 6\n  min_et_clag:
+      32\n  min_et_headroom: 32\n\ndedispersion_outputs: 0.002 GB/s"
+  startup_by_beam:
+  - {beam_id: 1, producer_start_chunk_index: 0, status: authoritative}
+  units: {dm: pc cm^-3, freq_hi_MHz: MHz, freq_lo_MHz: MHz, toa_sample_abs: full-resolution
+      samples at complete-band low frequency, width_ms: ms, width_samp: full-resolution
+      samples}
+...
+”BLK 0    zlib                     ˝ö¥Ç´HoNº2Ö"à*xúc`Ä    ”BLK 0    zlib                     ˝ö¥Ç´HoNº2Ö"à*xúc`Ä    ”BLK 0    zlib                     +˚Âõ9∏ıÀB+sîc"xúfÄ   † ”BLK 0    zlib                     +˚Âõ9∏ıÀB+sîc"xúfÄ   † ”BLK 0    zlib                     rèÙM®Ó≤CÑ˜≥k÷x‡íxúcd``    ”BLK 0    zlib                     rèÙM®Ó≤CÑ˜≥k÷x‡íxúcd``    ”BLK 0    zlib                     [ÂÒÏ..çf√Øxúc```    ”BLK 0    zlib                     [ÂÒÏ..çf√Øxúc```    ”BLK 0    zlib                     ⁄›K›Yó≈Ω
+€Ÿ’ƒπxúÀde`  ∑ o”BLK 0    zlib                     {¬◊õñmøhÉT¯ΩC©xúÛ```  $ I”BLK 0    zlib                     3wÕÉt∆¡b1ôà!„xúc` w  Ó ê”BLK 0    zlib                     ∑Ä<©aW0Ù⁄¬¸◊JÂ˘xú”*î˘ÒÕæﬁ ¬§”BLK 0    zlib                     m2@íjW˘ûGYç◊¶/xúSÕTÕdùÿ 
+ƒ’”BLK 0    zlib                     u≤\±*íı*ÚMˆ∆(#xúc`   X I”BLK 0    zlib                     î›í€µçPœ6ˇ?bWRxúKª˙<K˚ª cı”BLK 0    zlib                     Å”aGºßÂ]Ô√≥Aixúc` ÇE ls”BLK 0    zlib                     ÿ¨•Ø“≤ƒc/45ä(≥“xúc` ÇÇÈ ∆H”BLK 0    zlib                     ¿ﬁ§‡Ù$@ w`è≠åÅxúcdfb    ”BLK 0    zlib       	       	       'Ëƒ.˜≈ƒÈjR9AÂxúc    ”BLK 0    zlib       	       	       'Ëƒ.˜≈ƒÈjR9AÂxúc    ”BLK 0    zlib                     ˝ö¥Ç´HoNº2Ö"à*xúc`Ä    ”BLK 0    zlib                     ˝ö¥Ç´HoNº2Ö"à*xúc`Ä    ”BLK 0    zlib                     +˚Âõ9∏ıÀB+sîc"xúfÄ   † ”BLK 0    zlib                     +˚Âõ9∏ıÀB+sîc"xúfÄ   † ”BLK 0    zlib                     rèÙM®Ó≤CÑ˜≥k÷x‡íxúcd``    ”BLK 0    zlib                     [ÂÒÏ..çf√Øxúc```    ”BLK 0    zlib                     [ÂÒÏ..çf√Øxúc```    ”BLK 0    zlib                     ⁄›K›Yó≈Ω
+€Ÿ’ƒπxúÀde`  ∑ o”BLK 0    zlib                     {¬◊õñmøhÉT¯ΩC©xúÛ```  $ I”BLK 0    zlib                     3wÕÉt∆¡b1ôà!„xúc` w  Ó ê”BLK 0    zlib                     ∑Ä<©aW0Ù⁄¬¸◊JÂ˘xú”*î˘ÒÕæﬁ ¬§”BLK 0    zlib                     m2@íjW˘ûGYç◊¶/xúSÕTÕdùÿ 
+ƒ’”BLK 0    zlib                     u≤\±*íı*ÚMˆ∆(#xúc`   X I”BLK 0    zlib                     î›í€µçPœ6ˇ?bWRxúKª˙<K˚ª cı”BLK 0    zlib                     Å”aGºßÂ]Ô√≥Aixúc` ÇE ls”BLK 0    zlib                     ÿ¨•Ø“≤ƒc/45ä(≥“xúc` ÇÇÈ ∆H”BLK 0    zlib                     u ÚJ¬pnªé£R˝W†8xú+9∫OMÍ∫= ß¶”BLK 0    zlib                     .“Ó§íp£&}2Pr∆xúc`   ® q”BLK 0    zlib                     ¿ﬁ§‡Ù$@ w`è≠åÅxúcdfb    ”BLK 0    zlib       	       	       'Ëƒ.˜≈ƒÈjR9AÂxúc    ”BLK 0    zlib       	       	       'Ëƒ.˜≈ƒÈjR9AÂxúc    ”BLK 0    zlib                     Ä]“ —O’àÏé˘‰ªTÑ-Lxúcd```@ ¿ !”BLK 0    zlib       @       @       Ës∆àÏÁÅ}—´ –™ùxú-≈µÉ   0‹≠EZ¸ˇ/Hñ¡+t‰ÿâSgŒ]∏tÂ⁄ç[wÓ=¯„ØGOûΩ¯ÁøWoﬁ}¯ÙÂ€´ÄÒ#ASDF BLOCK INDEX
+%YAML 1.1
+---
+- 11792
+- 11857
+- 11922
+- 11987
+- 12052
+- 12118
+- 12184
+- 12250
+- 12316
+- 12382
+- 12448
+- 12516
+- 12586
+- 12656
+- 12723
+- 12793
+- 12861
+- 12929
+- 12995
+- 13058
+- 13121
+- 13186
+- 13251
+- 13316
+- 13381
+- 13447
+- 13513
+- 13579
+- 13645
+- 13711
+- 13779
+- 13849
+- 13919
+- 13986
+- 14056
+- 14124
+- 14192
+- 14262
+- 14329
+- 14395
+- 14458
+- 14521
+- 14590
+...

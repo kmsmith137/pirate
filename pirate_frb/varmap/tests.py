@@ -1110,9 +1110,9 @@ def test_estimate_distance():
 
     scored = ('exact (frac=1)' if (ratio is None)
               else f'spread/stderr {ratio:.2f}, median |z| {med_z:.2f}')
+    weighting = "exercised" if weighted else "NOT exercised: every group the same size"
     atomic_print(f'    test_estimate_distance(nbeta={approx.nbeta}): pass, {scored}'
-                 f' (group-size weighting {"exercised" if weighted else "NOT exercised:"
-                 " every group the same size"})')
+                 f' (group-size weighting {weighting})')
 
 
 def test_multimap():

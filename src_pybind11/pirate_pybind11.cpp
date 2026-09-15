@@ -29,6 +29,7 @@
 #include "../include/pirate/Dedisperser.hpp"
 #include "../include/pirate/DedispersionConfig.hpp"
 #include "../include/pirate/DedispersionPlan.hpp"
+#include "../include/pirate/inlines.hpp"             // xdiv()
 #include "../include/pirate/PeakFindingKernel.hpp"     // ReferenceDedisperser.pf_kernels
 
 using namespace std;
@@ -67,6 +68,72 @@ static py::tuple _plan_decode_argmax2(const DedispersionPlan &plan, long itree,
     plan.decode_argmax2(itree, fmin, fmax, tlo, thi, p,
                         freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp);
     return py::make_tuple(freq_lo_MHz, freq_hi_MHz, dm, timestamp_samp, width_samp);
+}
+
+
+// Offline batch callers carry the producer's Dcores separately from geometry.
+// Keep the event loop in C++, just as in the handshaken FrbGrouper bindings.
+template<typename T>
+static void _check_plan_batch_arg(const char *name, const Array<T> &a, long n)
+{
+    if ((a.ndim != 1) || !a.is_fully_contiguous() || !a.on_host() || (a.size != n))
+        throw runtime_error(string("plan batch decode: '") + name
+                            + "' must be a 1-d contiguous host array of length "
+                            + to_string(n));
+}
+
+static py::tuple _plan_decode_argmax_batch(
+    const DedispersionPlan &plan, const Array<uint> &tokens, const Array<long> &itrees,
+    const Array<long> &idms, const Array<long> &itimes, const Array<long> &dcores)
+{
+    long n = tokens.size;
+    if (n <= 0)
+        throw runtime_error("plan batch decode: empty input; callers should short-circuit it");
+    _check_plan_batch_arg("tokens", tokens, n);
+    _check_plan_batch_arg("itrees", itrees, n);
+    _check_plan_batch_arg("idms", idms, n);
+    _check_plan_batch_arg("itimes", itimes, n);
+    _check_plan_batch_arg("dcores", dcores, plan.ntrees);
+    // Validate the entire producer descriptor, including unused trees.
+    for (long it = 0; it < plan.ntrees; it++) {
+        const DedispersionTree &tree = plan.trees.at(it);
+        validate_dcore(dcores.data[it], xdiv(tree.nt_ds, tree.nt_out));
+    }
+
+    Array<long> fmins({n}, af_uhost), fmaxs({n}, af_uhost);
+    Array<long> tlos({n}, af_uhost), this_({n}, af_uhost), ps({n}, af_uhost);
+    for (long i = 0; i < n; i++) {
+        long it = itrees.data[i];
+        if ((it < 0) || (it >= plan.ntrees))
+            throw runtime_error("plan batch decode: tree index out of range");
+        plan.decode_argmax(tokens.data[i], it, dcores.data[it], idms.data[i], itimes.data[i],
+                           fmins.data[i], fmaxs.data[i], tlos.data[i], this_.data[i], ps.data[i]);
+    }
+    return py::make_tuple(fmins, fmaxs, tlos, this_, ps);
+}
+
+static py::tuple _plan_decode_argmax2_batch(
+    const DedispersionPlan &plan, const Array<long> &itrees, const Array<long> &fmins,
+    const Array<long> &fmaxs, const Array<long> &tlos, const Array<long> &this_,
+    const Array<long> &ps)
+{
+    long n = itrees.size;
+    if (n <= 0)
+        throw runtime_error("plan batch decode: empty input; callers should short-circuit it");
+    _check_plan_batch_arg("itrees", itrees, n);
+    _check_plan_batch_arg("fmins", fmins, n);
+    _check_plan_batch_arg("fmaxs", fmaxs, n);
+    _check_plan_batch_arg("tlos", tlos, n);
+    _check_plan_batch_arg("this", this_, n);
+    _check_plan_batch_arg("ps", ps, n);
+
+    Array<double> flo({n}, af_uhost), fhi({n}, af_uhost), dm({n}, af_uhost);
+    Array<double> toa({n}, af_uhost), width({n}, af_uhost);
+    for (long i = 0; i < n; i++)
+        plan.decode_argmax2(itrees.data[i], fmins.data[i], fmaxs.data[i],
+                            tlos.data[i], this_.data[i], ps.data[i],
+                            flo.data[i], fhi.data[i], dm.data[i], toa.data[i], width.data[i]);
+    return py::make_tuple(flo, fhi, dm, toa, width);
 }
 
 
@@ -536,6 +603,27 @@ PYBIND11_MODULE(pirate_pybind11, m)  // extension module gets compiled to pirate
                "    early-trigger tree extrapolates to the band bottom, so the time can lie past\n"
                "    the chunk end, and the finite peak-finder kernel width can push an event\n"
                "    detected near the chunk start slightly before it.")
+          .def("decode_argmax_batch", &_plan_decode_argmax_batch,
+               py::arg("tokens"), py::arg("itrees"), py::arg("idms"), py::arg("itimes"),
+               py::kw_only(), py::arg("dcores"),
+               "Native CPU batch form of decode_argmax(), for offline consumers.\n\n"
+               "Inputs are nonempty 1-d contiguous host arrays: uint32 tokens and int64\n"
+               "itrees/idms/itimes, one entry per event. The required keyword-only\n"
+               "dcores is an int64 array with one value per producer output tree,\n"
+               "taken from its GpuDedisperser.Dcores or saved-map metadata. It is\n"
+               "never inferred from the consumer plan or installed kernels.\n\n"
+               "Returns (fmins, fmaxs, tlos, this, ps), five int64 arrays with the\n"
+               "same coordinates as the scalar method. All Dcores and input rows\n"
+               "are validated; empty batches must be handled by the caller.")
+          .def("decode_argmax2_batch", &_plan_decode_argmax2_batch,
+               py::arg("itrees"), py::arg("fmins"), py::arg("fmaxs"),
+               py::arg("tlos"), py::arg("this"), py::arg("ps"),
+               "Native CPU batch form of decode_argmax2(). Inputs are nonempty\n"
+               "1-d contiguous int64 host arrays of equal length. Returns five\n"
+               "float64 arrays: frequencies in MHz, DM, chunk-relative arrival\n"
+               "time in full-resolution samples, and nominal width in samples.\n"
+               "This physical conversion needs no Dcores; its input integer\n"
+               "coordinates have already been decoded using producer metadata.")
           .def("compute_steady_state_it0", &DedispersionPlan::compute_steady_state_it0,
                py::arg("itree"),
                "Time index at which each of tree ``itree``'s DM channels becomes\n"

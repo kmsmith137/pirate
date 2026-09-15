@@ -71,8 +71,8 @@ def _check_batch_decode(g):
     """Check FrbGrouper's vectorized decode_argmax*() bindings, in the grouper child.
 
     These are the bindings the production event path uses (pirate_frb.rpc.FrbGrouper's
-    create_events()), and this is the only place they can be tested: they need a
-    handshaken grouper, and DedispersionPlan has no batch-decode binding. So a change to
+    create_events()), and they need a handshaken grouper to be tested. Offline plan
+    batch bindings are tested separately with explicit producer Dcores. A change to
     the vectorized helpers shows up HERE, under 'test --serv', not under '--amax'.
 
     The scalar reference is the grouper's own DedispersionPlan, rebuilt from the handshake
@@ -190,20 +190,20 @@ class ServerTester:
     # ---- Construction + lifecycle ----
 
     @staticmethod
-    def _random_params():
+    def _random_params(single_beam=False):
         """Return one random subscale config (a plain dict).
 
         Config-first, like
         test --net (see tests/utils.py); no_dedispersion/pacing are never used
         here, and a grouper is always configured.
 
-        min_batch_slots=2 is the one thing this needs beyond test --net: a
-        grouper-enabled FrbServer builds its dedisperser with
-        nbatches_out = 2*num_active_batches, and FrbGrouper requires that output
-        ring to fit within one chunk (num_batch_slots * beams_per_batch <=
-        total_beams; FrbGrouper.cpp).
+        The single-beam case exercises an output ring spanning time chunks:
+        FrbServer retains two output slots even with only one beam batch.
         """
-        config = make_random_subscale_config(min_batch_slots=2)
+        config = make_random_subscale_config()
+        if single_beam:
+            config.beams_per_gpu = config.beams_per_batch = config.num_active_batches = 1
+            config.validate()
         total_nfreq = sum(config.zone_nfreq)
         num_receivers, nworkers = pick_receiver_worker_counts(total_nfreq)
         nab = config.num_active_batches
@@ -234,8 +234,8 @@ class ServerTester:
             num_nfs_threads        = random.randint(1, 3),
         )
 
-    def __init__(self):
-        self.p = ServerTester._random_params()
+    def __init__(self, single_beam=False):
+        self.p = ServerTester._random_params(single_beam=single_beam)
         self.run_id = secrets.token_hex(8)
         self.ssd_dir = f"/dev/shm/pirate_test_server_ssd_{self.run_id}"
         self.nfs_dir = f"/dev/shm/pirate_test_server_nfs_{self.run_id}"
@@ -750,12 +750,13 @@ class ServerTester:
 def test_server():
     """One iteration of the end-to-end FakeXEngine -> FrbServer -> FrbGrouper test."""
     atomic_print("  test_server()...")
-    with ServerTester() as t:
-        params_no_config = {k: v for k, v in t.p.items() if k != 'config'}
-        atomic_print(f"    params: {params_no_config}")
-        c = t.p['config']
-        atomic_print(f"    config: toplevel_tree_rank={c.toplevel_tree_rank}, num_primary_trees={c.num_primary_trees},"
-                     f" beams_per_batch={c.beams_per_batch}, num_active_batches={c.num_active_batches},"
-                     f" dtype={c.dtype}")
-        t.run()
+    for single_beam in (False, True):
+        with ServerTester(single_beam=single_beam) as t:
+            params_no_config = {k: v for k, v in t.p.items() if k != 'config'}
+            atomic_print(f"    params: {params_no_config}")
+            c = t.p['config']
+            atomic_print(f"    config: toplevel_tree_rank={c.toplevel_tree_rank}, num_primary_trees={c.num_primary_trees},"
+                         f" beams_per_batch={c.beams_per_batch}, num_active_batches={c.num_active_batches},"
+                         f" dtype={c.dtype}")
+            t.run()
     atomic_print("    PASSED")

@@ -941,52 +941,59 @@ static void check_pulse_consistency(long nf, const XEngineMetadata &md, const si
 }
 
 
-// Helper for AssembledFrame::randomize() pulse injection: overwrite each channel's (contiguous)
-// pulse samples in the already-noise-filled int4 'data_arr'. Frame row f == SinglePulse channel f
-// (both low-to-high). The pulse occupies pulse-time [freq_it0[f], freq_it0[f]+freq_nt[f]); frame
-// time it_frame maps to pulse time (it_frame + dt_sp). Each pulse sample becomes
-// quantize(signal/S[f] + prequant_rms*gaussian) -- matching avx2_simulate_4bit_noise()'s inverse-CDF
-// levels -- where the signal (post-scaled units) is divided by S[f] into pre-scaled units first.
-static void inject_single_pulse(const ksgpu::Array<void> &data_arr, long nfreq, long ntime,
-                                const std::vector<float> &S, const simpulse::SinglePulse &sp,
-                                long dt_sp, std::mt19937 &rng)
+// Sum all pulse signals which contribute to each frame sample, then add one noise realization and
+// quantize once. The whole frame has already been filled with pure noise, so only samples touched by
+// at least one pulse are overwritten here. Frame and SinglePulse frequency axes are both low-to-high.
+static void inject_pulses(
+    const ksgpu::Array<void> &data_arr, long nfreq, long ntime, const std::vector<float> &S,
+    const std::vector<std::shared_ptr<const simpulse::SinglePulse>> &pulses,
+    long dt_sp, std::mt19937 &rng)
 {
     std::normal_distribution<float> gdist(0.0f, avx2_4bit_prequant_noise_rms);   // rms = 2.5
     unsigned char *bytes = static_cast<unsigned char *>(data_arr.data);
 
-    const long  *it0v = sp.freq_it0.data;
-    const long  *ntv  = sp.freq_nt.data;
-    const long  *offv = sp.freq_sd_off.data;
-    const float *sd   = sp.sparse_data.data;
+    std::vector<float> signal(ntime);
+    std::vector<unsigned char> touched(ntime);
 
     for (long f = 0; f < nfreq; f++) {
-        long nt_ch = ntv[f];
-        if (nt_ch == 0)
-            continue;                                   // no pulse in this channel
+        std::fill(signal.begin(), signal.end(), 0.0f);
+        std::fill(touched.begin(), touched.end(), 0);
 
-        // Frame-time window of this channel's pulse run, clipped to [0, ntime). Partial (or zero)
-        // overlap is fine -- a frame is one chunk of a longer stream.
-        long t0 = std::max(0L,    it0v[f]         - dt_sp);
-        long t1 = std::min(ntime, it0v[f] + nt_ch - dt_sp);
-        if (t0 >= t1)
-            continue;
+        for (const auto &sp : pulses) {
+            const long  *it0v = sp->freq_it0.data;
+            const long  *ntv  = sp->freq_nt.data;
+            const long  *offv = sp->freq_sd_off.data;
+            const float *sd   = sp->sparse_data.data;
+            long nt_ch = ntv[f];
+            if (nt_ch == 0)
+                continue;
+
+            long t0 = std::max(0L,    it0v[f]         - dt_sp);
+            long t1 = std::min(ntime, it0v[f] + nt_ch - dt_sp);
+            long sd0 = offv[f], it0 = it0v[f];
+            for (long t = t0; t < t1; t++) {
+                long k = (t + dt_sp) - it0;
+                signal[t] += sd[sd0 + k];
+                touched[t] = 1;
+            }
+        }
 
         float inv_S = 1.0f / S[f];
-        long  row = f * ntime;                          // int4 index of row start (even; ntime % 256 == 0)
-        long  sd0 = offv[f], it0 = it0v[f];
-        for (long t = t0; t < t1; t++) {
-            long  k = (t + dt_sp) - it0;                // invariant: 0 <= k < nt_ch
-            float x = sd[sd0 + k] * inv_S + gdist(rng); // pre-scaled signal + pre-scaled noise
+        long row = f * ntime;
+        for (long t = 0; t < ntime; t++) {
+            if (!touched[t])
+                continue;
+            float x = signal[t] * inv_S + gdist(rng);
             // Round-half-up, clamp to [-7,7] (never -8). Clamp in the FLOAT
             // domain before the int cast: float->int conversion of an
             // out-of-range value is UB, and x can overflow int for
             // pathological signal/scale combinations.
             float xq = std::min(7.0f, std::max(-7.0f, std::floor(x + 0.5f)));
             int   q = (int) xq;
-            long  idx = row + t;                        // int4 index; nibble parity == t parity
+            long  idx = row + t;
             unsigned char &b = bytes[idx >> 1];
-            if (idx & 1) b = (unsigned char)((b & 0x0F) | ((q & 0xF) << 4));   // high nibble (odd t)
-            else         b = (unsigned char)((b & 0xF0) |  (q & 0xF));         // low  nibble (even t)
+            if (idx & 1) b = (unsigned char)((b & 0x0F) | ((q & 0xF) << 4));
+            else         b = (unsigned char)((b & 0xF0) |  (q & 0xF));
         }
     }
 }
@@ -995,13 +1002,28 @@ static void inject_single_pulse(const ksgpu::Array<void> &data_arr, long nfreq, 
 void AssembledFrame::randomize(bool normalize, bool gaussian,
                                const shared_ptr<const simpulse::SinglePulse> &sp, long dt_sp)
 {
-    // Pulse injection preconditions + consistency, validated up front (before touching buffers).
-    if (sp) {
+    std::vector<std::shared_ptr<const simpulse::SinglePulse>> pulses;
+    if (sp)
+        pulses.push_back(sp);
+    randomize_many(normalize, gaussian, pulses, dt_sp);
+}
+
+
+void AssembledFrame::randomize_many(
+    bool normalize, bool gaussian,
+    const std::vector<std::shared_ptr<const simpulse::SinglePulse>> &pulses, long dt_sp)
+{
+    // Validate the complete pulse collection before touching either frame buffer.
+    if (!pulses.empty()) {
         if (!gaussian || !normalize)
-            throw std::runtime_error("AssembledFrame::randomize: signal injection (sp != null)"
+            throw std::runtime_error("AssembledFrame::randomize_many: signal injection"
                                      " requires gaussian=true and normalize=true");
         xassert(metadata);   // non-null by invariant
-        check_pulse_consistency(nfreq, *metadata, *sp);
+        for (const auto &sp : pulses) {
+            if (!sp)
+                throw std::runtime_error("AssembledFrame::randomize_many: pulses contains null");
+            check_pulse_consistency(nfreq, *metadata, *sp);
+        }
     }
 
     // Thread-safety: the array STATE (empty vs nonempty, and which slab the
@@ -1095,12 +1117,12 @@ void AssembledFrame::randomize(bool normalize, bool gaussian,
         xassert(data_arr.data != nullptr);
         xassert(data_arr.is_fully_contiguous());   // contiguous sweep below
 
-        if (sp) {
+        if (!pulses.empty()) {
             // Signal + noise (gaussian && normalize guaranteed by the precondition above; S is
             // populated). Fill the whole frame with pure noise (fast SIMD), then overwrite each
             // channel's sparse pulse samples.
             avx2_simulate_4bit_noise(static_cast<unsigned int *>(data_arr.data), data_arr.size);
-            inject_single_pulse(data_arr, nfreq, ntime, S, *sp, dt_sp, rng);
+            inject_pulses(data_arr, nfreq, ntime, S, pulses, dt_sp, rng);
         }
         else if (gaussian) {
             // Simulated Gaussian noise quantized to int4 in [-7,7] (the -8 sentinel is never

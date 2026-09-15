@@ -101,7 +101,7 @@ xengine_metadata:
 
     unix_ns_at_seq_0: 1772483060000000000
     dt_ns_per_seq: 5120
-    seq_per_frb_time_sample: 256
+    seq_per_frb_time_sample: 195
 
 # Telescope alignment and localization.
 # 

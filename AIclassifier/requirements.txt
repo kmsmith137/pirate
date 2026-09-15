@@ -1,0 +1,4 @@
+# Notebook extras; install into the environment used to build PIRATE.
+# PIRATE, ksgpu, CuPy, NumPy, and ASDF come from that environment.
+matplotlib
+jupyterlab

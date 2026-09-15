@@ -18,9 +18,8 @@ def make_random_subscale_config(min_batch_slots=1):
       - time_samples_per_chunk a multiple of 256, the network protocol's cadence.
       - beams_per_gpu <= 8, to keep the frame count manageable.
 
-    'min_batch_slots' is the one knob a caller varies: pass 2 for a
-    grouper-enabled FrbServer, which needs
-    beams_per_gpu >= 2 * num_active_batches * beams_per_batch.
+    'min_batch_slots' sets the minimum number of beam batches per active
+    compute stream. Output-ring slots may span multiple time chunks.
 
     All four are ARGUMENTS TO THE DRAW, not conditions checked afterwards, and
     that distinction matters more than it looks: they correlate with

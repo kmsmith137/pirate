@@ -4,6 +4,15 @@
 linux machine with **a physical GPU**, and the cuda toolkit installed.
 I hope to improve this in the future!
 
+Clone this fork first so that the checkout includes the Grouper and its examples.
+Run this command from the directory that will contain the checkout:
+
+```bash
+git clone --recursive https://github.com/MattTrudu/pirate.git
+```
+
+The environment-creation command below runs from that same parent directory.
+
 1. Set up a conda environment. `pirate` relies on the **system** CUDA toolkit
 (`nvcc`, CUDA headers) and the **system** host compiler (`gcc`/`g++`); everything
 else is conda-installed. The repo ships two environment files:
@@ -25,11 +34,10 @@ I recommend the `miniforge` fork of conda, not the original conda.
 3. Install `pirate`. The build system supports either python builds with `pip`,
 or C++ builds with `make`. Here's what I recommend:
 ```
-    # Step 1. Clone the repo and build with 'make', so that you can read
+    # Step 1. Enter the cloned fork and build with 'make', so that you can read
     # the error messages if anything goes wrong. (pip either generates too
     # little output or too much output, depending on whether you use -v).
 
-    git clone --recursive https://github.com/kmsmith137/pirate
     cd pirate
     make -j 32
 

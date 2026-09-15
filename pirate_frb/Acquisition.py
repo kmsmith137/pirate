@@ -14,6 +14,9 @@ _FRAME_RE = re.compile(r"^frame_b(\d+)_t(\d+)\.asdf$")
 # final filename with a '.tmp' + make_random_hex_string(8) suffix appended.
 _TMP_RE = re.compile(r"\.tmp[0-9a-fA-F]{8}$")
 
+# Derived files optionally written by run_offline_dedisperser -- not input frames.
+_SNRMAP_RE = re.compile(r"^frame_b\d+_t\d+_snrmap\.asdf$")
+
 
 class Acquisition:
     """Helper class, to enumerate `frame_b{beam}_t{chunk}.asdf` files in a pirate acqdir.
@@ -21,7 +24,8 @@ class Acquisition:
     Typically, the acqdir will be created by either `pirate_frb rpc start_stream`,
     or a triggered `WriteFiles` RPC. The constructor raises an exception if the
     acqdir contains a file that's not of the form `frame_b{beam}_t{chunk}.asdf`
-    (except uncommitted C++ make_tmp_filename() temp files, which are ignored
+    (except derived *_snrmap.asdf files and uncommitted C++ make_tmp_filename()
+    temp files, which are ignored
     with a message printed to stdout), or if any beam's time chunk indices are
     non-contiguous. Different beams may span different time-index ranges.
 
@@ -48,6 +52,8 @@ class Acquisition:
             if m is not None:
                 b, chunk = int(m.group(1)), int(m.group(2))
                 per_beam.setdefault(b, []).append((chunk, os.path.join(acqdir, name)))
+            elif _SNRMAP_RE.match(name):
+                continue
             elif _TMP_RE.search(name):
                 atomic_print(f"Acquisition: ignoring temporary (uncommitted) file {name!r} in {acqdir}")
             else:

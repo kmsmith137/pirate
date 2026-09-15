@@ -36,6 +36,35 @@ documentation snapshots (do not edit them by hand; regenerate by running
   Production configs are also used by the build system (`makefile_helper.py`) to
   determine which CUDA kernels to autogenerate.
 
+Observation examples are collected under [examples/](../examples/README.md):
+the [one-beam walkthrough](../examples/simple_frb/README.md) and
+[eight-beam live search](../examples/chord_8beams/README.md).
+
+- **`grouper/`** -- shared peakfinding, clustering and execution settings for
+  offline and online processing. Start from the commented
+  [template](grouper/example.yml) for an existing acquisition:
+
+  ```
+  pirate_frb run offline_grouper ACQDIR configs/grouper/example.yml
+  ```
+
+  Live recipes contain the same three sections under `grouper:`. All fields
+  are required and unknown fields are rejected. The one-beam generator exports
+  this mapping as an offline `grouper.yml` snapshot automatically.
+  `execution.beam_batch_size` controls offline batches; live batches follow
+  the producer. Examples can choose different values: the template uses a
+  400 ms timeout, while the observation demos disable it.
+
+  The grouper finalizes chunk `i` after receiving only the configured left
+  halo from chunk `i+1`; an event is owned by `i` when any member came from
+  `i`. The configured radius multiplier defines the map-coordinate association
+  domain. Output metadata records its intersection with candidates resolved
+  after `i+1`; grouping tolerances apply only inside it and never introduce an
+  `i+2` dependency. `timeout_ms` bounds each GPU grouping window (`0` disables it), while
+  `timeout_policy` either discards that whole window or emits only its fully
+  completed groups. See the CLI reference for the exact ownership, timeout,
+  and catalog-provenance contracts.
+
 - **`frb_server/`** -- FRB search server configs (server/CPU layout, network addresses,
   host+GPU memory pools, ring buffer length, file-writing threads, SSD/NFS paths). Used by:
 
